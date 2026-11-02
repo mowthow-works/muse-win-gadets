@@ -177,6 +177,8 @@ fn ensure_session_window(app: &AppHandle) -> Result<WebviewWindow, String> {
         .build()
         .map_err(|e| format!("Failed to build session window: {}", e))?;
 
+    let _ = window.set_icon(tauri::include_image!("icons/128x128.png"));
+
     Ok(window)
 }
 
@@ -679,7 +681,9 @@ pub fn run() {
             )?;
 
             let _tray = TrayIconBuilder::new()
+                .icon(tauri::include_image!("icons/128x128.png"))
                 .menu(&menu)
+                .tooltip("Muse Desktop Gadget")
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "toggle_main" => {
@@ -751,9 +755,10 @@ pub fn run() {
                 });
             }
 
-            // 設定の初期サイズをメインウィンドウに反映
+            // 設定の初期サイズ・アイコンをメインウィンドウに反映
             let config = load_config_internal(handle);
             if let Some(main_win) = app.get_webview_window("main") {
+                let _ = main_win.set_icon(tauri::include_image!("icons/128x128.png"));
                 let (w, h) = if config.size_mode == "large" {
                     (LARGE_WIDTH, LARGE_HEIGHT)
                 } else {
