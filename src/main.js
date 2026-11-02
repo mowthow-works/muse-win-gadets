@@ -426,10 +426,7 @@ async function enterMascotMode() {
   try {
     const newMode = await invoke('enter_mascot_mode');
     applySizeMode(newMode);
-    // マスコットモード移行時、最新のMuseメッセージがあればパタパタ表示
-    if (lastSeenAssistantText) {
-      setTimeout(() => playLupinTyping(lastSeenAssistantText), 300);
-    }
+    // ※最小化移行時の自動発話は廃止（新着メッセージ時のみ通知）
   } catch (err) {
     console.error('enterMascotMode error:', err);
   }
@@ -437,10 +434,20 @@ async function enterMascotMode() {
 
 async function restoreFromMascot() {
   try {
+    // 中・小画面の代わりにセッションウィンドウ（公式画面）を前面表示
+    await invoke('open_or_show_session');
+  } catch (err) {
+    console.error('restoreFromMascot to session error:', err);
+  }
+}
+
+// （温存）旧ガジェット中・小画面への復元処理
+async function restoreToLegacyGadget() {
+  try {
     const newMode = await invoke('restore_from_mascot');
     applySizeMode(newMode);
   } catch (err) {
-    console.error('restoreFromMascot error:', err);
+    console.error('restoreToLegacyGadget error:', err);
   }
 }
 

@@ -97,7 +97,7 @@ pub struct GadgetConfig {
 impl Default for GadgetConfig {
     fn default() -> Self {
         Self {
-            size_mode: "small".to_string(),
+            size_mode: "mascot".to_string(),
             last_normal_mode: "small".to_string(),
             message_limit: 5,
             hotkey: "Ctrl+Shift+M".to_string(),
@@ -190,6 +190,41 @@ fn ensure_session_window(app: &AppHandle) -> Result<WebviewWindow, String> {
         .map_err(|e| format!("Failed to build session window: {}", e))?;
 
     let _ = window.set_icon(tauri::include_image!("icons/128x128.png"));
+
+    // セッション画面の「×」や最小化ボタン（Win+M含む）でマスコットモードへ移行
+    let handle_for_session = app.clone();
+    window.on_window_event(move |event| {
+        match event {
+            tauri::WindowEvent::CloseRequested { api, .. } => {
+                api.prevent_close();
+                let h = handle_for_session.clone();
+                tauri::async_runtime::spawn(async move {
+                    let _ = hide_session(h).await;
+                });
+            }
+            tauri::WindowEvent::Resized(size) => {
+                // Windows で最小化された場合、内部サイズが 0x0 になる
+                if size.width == 0 && size.height == 0 {
+                    let h = handle_for_session.clone();
+                    tauri::async_runtime::spawn(async move {
+                        let _ = hide_session(h).await;
+                    });
+                }
+            }
+            tauri::WindowEvent::Focused(false) => {
+                // 最小化ボタンや Win+M でフォーカスが外れ、かつ最小化状態の場合
+                let h = handle_for_session.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Some(s) = h.get_webview_window("session") {
+                        if s.is_minimized().unwrap_or(false) {
+                            let _ = hide_session(h).await;
+                        }
+                    }
+                });
+            }
+            _ => {}
+        }
+    });
 
     Ok(window)
 }
@@ -694,6 +729,13 @@ async fn open_in_browser(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 async fn open_or_show_session(app: AppHandle) -> Result<SessionStatus, String> {
     let session = ensure_session_window(&app)?;
+    
+    // セッション表示時はマスコットを非表示にする
+    if let Some(main_win) = app.get_webview_window("main") {
+        let _ = main_win.hide();
+    }
+
+    let _ = session.unminimize();
     let _ = session.show();
     let _ = session.set_focus();
 
@@ -711,6 +753,15 @@ async fn open_or_show_session(app: AppHandle) -> Result<SessionStatus, String> {
 async fn hide_session(app: AppHandle) -> Result<SessionStatus, String> {
     if let Some(session) = app.get_webview_window("session") {
         let _ = session.hide();
+        let _ = session.unminimize();
+
+        // セッション非表示時はマスコットモードを表示
+        if let Some(main_win) = app.get_webview_window("main") {
+            let _ = enter_mascot_mode(app.clone()).await;
+            let _ = main_win.show();
+            let _ = main_win.set_focus();
+        }
+
         let title = session.title().ok();
         let url = session.url().ok().map(|u| u.to_string());
         Ok(SessionStatus {
@@ -726,6 +777,20 @@ async fn hide_session(app: AppHandle) -> Result<SessionStatus, String> {
             title: None,
             url: None,
         })
+    }
+}
+
+#[tauri::command]
+async fn toggle_minimize_restore(app: AppHandle) -> Result<String, String> {
+    let session = ensure_session_window(&app)?;
+    let is_session_vis = session.is_visible().unwrap_or(false);
+
+    if is_session_vis {
+        let _ = hide_session(app).await;
+        Ok("mascot".to_string())
+    } else {
+        let _ = open_or_show_session(app).await;
+        Ok("session".to_string())
     }
 }
 
@@ -782,20 +847,20 @@ pub fn run() {
             let handle = app.handle();
 
             // システムトレイの初期化
-            let toggle_main = MenuItem::with_id(handle, "toggle_main", "ガジェットを表示 / 非表示", true, None::<&str>)?;
-            let toggle_size = MenuItem::with_id(handle, "toggle_size", "サイズ切替 (小 ⇄ 大)", true, None::<&str>)?;
+            let toggle_app = MenuItem::with_id(handle, "toggle_app", "セッション画面 ⇄ マスコット (Ctrl+Shift+M)", true, None::<&str>)?;
+            let open_session = MenuItem::with_id(handle, "open_session", "セッション画面を開く (公式UI)", true, None::<&str>)?;
             let toggle_mascot = MenuItem::with_id(handle, "toggle_mascot", "マスコットモード (アバター単体)", true, None::<&str>)?;
-            let open_session = MenuItem::with_id(handle, "open_session", "セッション画面を開く (公式UI / ログイン)", true, None::<&str>)?;
+            let toggle_size = MenuItem::with_id(handle, "toggle_size", "（旧）中・小画面切替", true, None::<&str>)?;
             let open_browser = MenuItem::with_id(handle, "open_browser", "ブラウザで Muse を開く", true, None::<&str>)?;
             let quit = MenuItem::with_id(handle, "quit", "終了", true, None::<&str>)?;
 
             let menu = Menu::with_items(
                 handle,
                 &[
-                    &toggle_main,
-                    &toggle_size,
-                    &toggle_mascot,
+                    &toggle_app,
                     &open_session,
+                    &toggle_mascot,
+                    &toggle_size,
                     &open_browser,
                     &quit,
                 ],
@@ -807,37 +872,28 @@ pub fn run() {
                 .tooltip("Muse Desktop Gadget")
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
-                    "toggle_main" => {
-                        if let Some(win) = app.get_webview_window("main") {
-                            if win.is_visible().unwrap_or(false) {
-                                let _ = win.hide();
-                            } else {
-                                let _ = win.show();
-                                let _ = win.set_focus();
-                            }
-                        }
-                    }
-                    "toggle_size" => {
+                    "toggle_app" => {
                         let app_clone = app.clone();
                         tauri::async_runtime::spawn(async move {
-                            let _ = toggle_size_mode(app_clone).await;
-                        });
-                    }
-                    "toggle_mascot" => {
-                        let app_clone = app.clone();
-                        tauri::async_runtime::spawn(async move {
-                            let config = load_config_internal(&app_clone);
-                            if config.size_mode == "mascot" {
-                                let _ = restore_from_mascot(app_clone).await;
-                            } else {
-                                let _ = enter_mascot_mode(app_clone).await;
-                            }
+                            let _ = toggle_minimize_restore(app_clone).await;
                         });
                     }
                     "open_session" => {
                         let app_clone = app.clone();
                         tauri::async_runtime::spawn(async move {
                             let _ = open_or_show_session(app_clone).await;
+                        });
+                    }
+                    "toggle_mascot" => {
+                        let app_clone = app.clone();
+                        tauri::async_runtime::spawn(async move {
+                            let _ = hide_session(app_clone).await;
+                        });
+                    }
+                    "toggle_size" => {
+                        let app_clone = app.clone();
+                        tauri::async_runtime::spawn(async move {
+                            let _ = toggle_size_mode(app_clone).await;
                         });
                     }
                     "open_browser" => {
@@ -858,31 +914,22 @@ pub fn run() {
                         ..
                     } = event
                     {
-                        let app = tray.app_handle();
-                        if let Some(win) = app.get_webview_window("main") {
-                            if win.is_visible().unwrap_or(false) {
-                                let _ = win.hide();
-                            } else {
-                                let _ = win.show();
-                                let _ = win.set_focus();
-                            }
-                        }
+                        let app = tray.app_handle().clone();
+                        tauri::async_runtime::spawn(async move {
+                            let _ = toggle_minimize_restore(app).await;
+                        });
                     }
                 })
                 .build(handle)?;
 
-            // グローバルホットキーの登録 (Ctrl+Shift+M)
+            // グローバルホットキーの登録 (Ctrl+Shift+M): 最小化 / 元に戻す
             if let Ok(shortcut) = "Ctrl+Shift+M".parse::<Shortcut>() {
                 let _ = app.global_shortcut().on_shortcut(shortcut, |app, _sc, event| {
                     if event.state() == ShortcutState::Pressed {
-                        if let Some(win) = app.get_webview_window("main") {
-                            if win.is_visible().unwrap_or(false) {
-                                let _ = win.hide();
-                            } else {
-                                let _ = win.show();
-                                let _ = win.set_focus();
-                            }
-                        }
+                        let app_clone = app.clone();
+                        tauri::async_runtime::spawn(async move {
+                            let _ = toggle_minimize_restore(app_clone).await;
+                        });
                     }
                 });
             }
@@ -944,6 +991,7 @@ pub fn run() {
             toggle_size_mode,
             enter_mascot_mode,
             restore_from_mascot,
+            toggle_minimize_restore,
             save_current_window_position,
             open_in_browser,
             open_or_show_session,
