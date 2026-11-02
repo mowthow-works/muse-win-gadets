@@ -197,6 +197,7 @@ window.__MUSE_BRIDGE__ = {
 
     return {
       avatar_name: avatarName,
+      avatar_src: vFound.el ? (vFound.el.currentSrc || vFound.el.src || '') : '',
       r1_avatar: {
         ok: !!(vFound.el && (vFound.el.currentSrc || vFound.el.src)),
         selector: vFound.selector || 'none'
@@ -278,6 +279,9 @@ window.__MUSE_BRIDGE__ = {
 
       const text = rawText
         .replace(/^(自分:|アシスタントメッセージ:)\s*/i, '')
+        .replace(/^[\s\uFEFF\xA0\u3000]+/g, '')
+        .replace(/[\s\uFEFF\xA0\u3000]+$/g, '')
+        .replace(/^[ \t\u3000]+/gm, '')
         .trim();
 
       if (text.length > 0) {

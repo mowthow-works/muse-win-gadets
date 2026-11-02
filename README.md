@@ -8,11 +8,17 @@ Muse（パーソナルAIエージェント `https://muse.ai`）の Windows 向�
     <tr>
       <td align="center">
         <b>📱 小モード（常駐コンパクト: 360×580）</b><br />
-        <img src="docs/screenshot_small.png" alt="Muse Desktop Gadget Small Mode" width="280" />
+        <img src="docs/screenshot_small.png" alt="Muse Desktop Gadget Small Mode" width="240" />
       </td>
       <td align="center">
         <b>🖥️ 大モード（2カラム閲覧: 1024×768）</b><br />
-        <img src="docs/screenshot_large.png" alt="Muse Desktop Gadget Large Mode" width="480" />
+        <img src="docs/screenshot_large.png" alt="Muse Desktop Gadget Large Mode" width="380" />
+      </td>
+    </tr>
+    <tr>
+      <td colspan="2" align="center">
+        <b>✨ マスコットモード（最小化時: デスクトップ常駐 ＆ ルパン風パタパタ吹き出し）</b><br />
+        <img src="docs/screenshot_mascot.png" alt="Muse Desktop Gadget Mascot Mode" width="560" />
       </td>
     </tr>
   </table>
@@ -29,9 +35,12 @@ Muse（パーソナルAIエージェント `https://muse.ai`）の Windows 向�
 - **R3: ガジェットからのメッセージ入力・送信**
   - 下部の入力欄からテキストを入力し、`Enter`（Shift+Enter で改行）で送信。
   - React の native value setter とイベント発火により、公式チャットへ安全に注入・送信します。
-- **R4: 常駐型デスクトップガジェット**
+- **R4: 常駐型デスクトップガジェット ＆ アバター単体マスコットモード**
   - 常に最前面表示（`alwaysOnTop`）、枠なし・角丸フロストガラス（glassmorphism）デザイン。
   - Museアバター（ラッキー）のカスタムアプリアイコンをタスクバー・システムトレイに採用し、トレイアイコンから表示/非表示、終了、各種操作が可能。
+  - **最小化時のマスコットモード**: ウィンドウ最小化ボタン（`−`）を押すと外枠を無くして円形アバターのみがデスクトップに浮かぶマスコットモードへ移行（位置は自動記憶、初期配置は右下隅）。
+  - **ルパン風パタパタタイピング吹き出し**: Muse から新着メッセージを受信すると、アバターの横に吹き出しが現れ、テキストが目線より気持ち早いテンポで1文字ずつ小気味よくタイピング表示されます（30秒表示、クリックで通常画面へ復帰、画面端に応じて吹き出し左右自動反転）。
+  - **アバター動画リアルタイム追従**: Web本体側の動画ソース（blob URL）変化を常時監視し、感情や発話アニメーションの変化に自動連動。
 - **R5: ウィンドウリミット（利用枠）の可視化**
   - 「設定 ＞ 一般 ＞ 利用状況」から現在のプラン名（例: `無料プラン`）、使用率（例: `17%使用済み` → 残量 `83%`）、リセット日時を抽出してプログレスバー表示。
 - **R6: ブラウザで開く**

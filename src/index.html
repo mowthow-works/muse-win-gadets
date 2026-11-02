@@ -26,9 +26,9 @@
     </header>
 
     <!-- ヒーローカード: アバター (R1) ＆ 利用枠メーター (R5) -->
-    <section class="hero-card">
+    <section class="hero-card" id="hero-card">
       <!-- 左側: アバター表示＋名称 -->
-      <div class="avatar-column">
+      <div class="avatar-column" id="avatar-column">
         <div class="avatar-wrapper" id="avatar-container" title="クリックでアバター動画を再取得">
           <video id="avatar-video" class="avatar-video hidden" autoplay loop muted playsinline></video>
           <div class="avatar-fallback" id="avatar-fallback">
@@ -36,8 +36,19 @@
             <span class="avatar-placeholder-text">Muse</span>
             <button class="avatar-fetch-btn" id="btn-fetch-avatar" title="動画取得">取得</button>
           </div>
+          <div class="mascot-restore-btn" id="mascot-restore-btn" title="通常画面に復元">⤢</div>
         </div>
         <div class="avatar-name" id="avatar-name">ラッキー</div>
+      </div>
+
+      <!-- マスコットモード専用: ルパン風吹き出し -->
+      <div class="mascot-bubble hidden" id="mascot-bubble" title="クリックで通常画面を開く">
+        <div class="mascot-bubble-tail"></div>
+        <div class="mascot-bubble-header">
+          <span class="mascot-bubble-title">Muse</span>
+          <button class="mascot-bubble-close" id="btn-bubble-close" title="閉じる">×</button>
+        </div>
+        <div class="mascot-bubble-body"><span class="mascot-bubble-text" id="mascot-bubble-text"></span><span class="mascot-bubble-cursor" id="mascot-bubble-cursor">▍</span></div>
       </div>
 
       <!-- 右側: 利用枠メーター -->

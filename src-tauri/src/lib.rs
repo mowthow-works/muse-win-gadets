@@ -48,6 +48,8 @@ const SMALL_WIDTH: f64 = 360.0;
 const SMALL_HEIGHT: f64 = 580.0;
 const LARGE_WIDTH: f64 = 1024.0;
 const LARGE_HEIGHT: f64 = 768.0;
+const MASCOT_WIDTH: f64 = 620.0;
+const MASCOT_HEIGHT: f64 = 260.0;
 
 static SESSION_BRIDGE_JS: &str = include_str!("session_bridge.js");
 
@@ -70,9 +72,15 @@ fn default_avatar_name() -> String {
     "ラッキー".to_string()
 }
 
+fn default_last_normal_mode() -> String {
+    "small".to_string()
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct GadgetConfig {
-    pub size_mode: String, // "small" or "large"
+    pub size_mode: String, // "small", "large", or "mascot"
+    #[serde(default = "default_last_normal_mode")]
+    pub last_normal_mode: String, // "small" or "large"
     pub message_limit: usize,
     pub hotkey: String,
     #[serde(default = "default_avatar_name")]
@@ -82,18 +90,22 @@ pub struct GadgetConfig {
     pub small_pos: Option<(i32, i32)>,
     #[serde(default)]
     pub large_pos: Option<(i32, i32)>,
+    #[serde(default)]
+    pub mascot_pos: Option<(i32, i32)>,
 }
 
 impl Default for GadgetConfig {
     fn default() -> Self {
         Self {
             size_mode: "small".to_string(),
+            last_normal_mode: "small".to_string(),
             message_limit: 5,
             hotkey: "Ctrl+Shift+M".to_string(),
             avatar_name: default_avatar_name(),
             last_limit_info: None,
             small_pos: None,
             large_pos: None,
+            mascot_pos: None,
         }
     }
 }
@@ -497,6 +509,22 @@ fn save_gadget_config(app: AppHandle, config: GadgetConfig) -> Result<(), String
     save_config_internal(&app, &config)
 }
 
+fn get_mascot_default_position(win: &WebviewWindow) -> (i32, i32) {
+    if let Ok(Some(monitor)) = win.current_monitor() {
+        let mon_pos = monitor.position();
+        let mon_size = monitor.size();
+        let scale = monitor.scale_factor();
+        let win_w = (MASCOT_WIDTH * scale) as i32;
+        let win_h = (MASCOT_HEIGHT * scale) as i32;
+        // デスクトップ右下隅（タスクバーの上マージン約 56px、右端マージン約 20px）
+        let x = mon_pos.x + (mon_size.width as i32) - win_w - 20;
+        let y = mon_pos.y + (mon_size.height as i32) - win_h - 56;
+        (x, y)
+    } else {
+        (100, 100)
+    }
+}
+
 fn clamp_window_to_monitor(win: &WebviewWindow, target_pos: Option<(i32, i32)>) {
     let Ok(Some(monitor)) = win.current_monitor() else {
         if let Some((x, y)) = target_pos {
@@ -530,6 +558,12 @@ fn clamp_window_to_monitor(win: &WebviewWindow, target_pos: Option<(i32, i32)>) 
 async fn toggle_size_mode(app: AppHandle) -> Result<String, String> {
     let mut config = load_config_internal(&app);
     let prev_mode = config.size_mode.clone();
+    
+    // もし現在 mascot なら直前の通常モードへ復元
+    if prev_mode == "mascot" {
+        return restore_from_mascot(app).await;
+    }
+
     let next_mode = if prev_mode == "small" {
         "large".to_string()
     } else {
@@ -540,7 +574,7 @@ async fn toggle_size_mode(app: AppHandle) -> Result<String, String> {
         if let Ok(cur_pos) = win.outer_position() {
             if prev_mode == "small" {
                 config.small_pos = Some((cur_pos.x, cur_pos.y));
-            } else {
+            } else if prev_mode == "large" {
                 config.large_pos = Some((cur_pos.x, cur_pos.y));
             }
         }
@@ -561,9 +595,94 @@ async fn toggle_size_mode(app: AppHandle) -> Result<String, String> {
     }
 
     config.size_mode = next_mode.clone();
+    config.last_normal_mode = next_mode.clone();
     let _ = save_config_internal(&app, &config);
 
     Ok(next_mode)
+}
+
+#[tauri::command]
+async fn enter_mascot_mode(app: AppHandle) -> Result<String, String> {
+    let mut config = load_config_internal(&app);
+    let prev_mode = config.size_mode.clone();
+
+    if prev_mode != "mascot" {
+        config.last_normal_mode = prev_mode.clone();
+    }
+
+    if let Some(win) = app.get_webview_window("main") {
+        if let Ok(cur_pos) = win.outer_position() {
+            if prev_mode == "small" {
+                config.small_pos = Some((cur_pos.x, cur_pos.y));
+            } else if prev_mode == "large" {
+                config.large_pos = Some((cur_pos.x, cur_pos.y));
+            }
+        }
+
+        let _ = win.set_size(LogicalSize::new(MASCOT_WIDTH, MASCOT_HEIGHT));
+        let target_pos = config.mascot_pos.or_else(|| Some(get_mascot_default_position(&win)));
+        clamp_window_to_monitor(&win, target_pos);
+    }
+
+    config.size_mode = "mascot".to_string();
+    let _ = save_config_internal(&app, &config);
+
+    Ok("mascot".to_string())
+}
+
+#[tauri::command]
+async fn save_current_window_position(app: AppHandle) -> Result<(), String> {
+    let mut config = load_config_internal(&app);
+    if let Some(win) = app.get_webview_window("main") {
+        if let Ok(pos) = win.outer_position() {
+            if config.size_mode == "mascot" {
+                config.mascot_pos = Some((pos.x, pos.y));
+            } else if config.size_mode == "large" {
+                config.large_pos = Some((pos.x, pos.y));
+            } else {
+                config.small_pos = Some((pos.x, pos.y));
+            }
+            let _ = save_config_internal(&app, &config);
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn restore_from_mascot(app: AppHandle) -> Result<String, String> {
+    let mut config = load_config_internal(&app);
+    let target_mode = if config.last_normal_mode == "large" {
+        "large"
+    } else {
+        "small"
+    };
+
+    if let Some(win) = app.get_webview_window("main") {
+        if let Ok(cur_pos) = win.outer_position() {
+            if config.size_mode == "mascot" {
+                config.mascot_pos = Some((cur_pos.x, cur_pos.y));
+            }
+        }
+
+        let (w, h) = if target_mode == "large" {
+            (LARGE_WIDTH, LARGE_HEIGHT)
+        } else {
+            (SMALL_WIDTH, SMALL_HEIGHT)
+        };
+        let _ = win.set_size(LogicalSize::new(w, h));
+
+        let saved_target = if target_mode == "large" {
+            config.large_pos
+        } else {
+            config.small_pos
+        };
+        clamp_window_to_monitor(&win, saved_target);
+    }
+
+    config.size_mode = target_mode.to_string();
+    let _ = save_config_internal(&app, &config);
+
+    Ok(target_mode.to_string())
 }
 
 #[tauri::command]
@@ -665,6 +784,7 @@ pub fn run() {
             // システムトレイの初期化
             let toggle_main = MenuItem::with_id(handle, "toggle_main", "ガジェットを表示 / 非表示", true, None::<&str>)?;
             let toggle_size = MenuItem::with_id(handle, "toggle_size", "サイズ切替 (小 ⇄ 大)", true, None::<&str>)?;
+            let toggle_mascot = MenuItem::with_id(handle, "toggle_mascot", "マスコットモード (アバター単体)", true, None::<&str>)?;
             let open_session = MenuItem::with_id(handle, "open_session", "セッション画面を開く (公式UI / ログイン)", true, None::<&str>)?;
             let open_browser = MenuItem::with_id(handle, "open_browser", "ブラウザで Muse を開く", true, None::<&str>)?;
             let quit = MenuItem::with_id(handle, "quit", "終了", true, None::<&str>)?;
@@ -674,6 +794,7 @@ pub fn run() {
                 &[
                     &toggle_main,
                     &toggle_size,
+                    &toggle_mascot,
                     &open_session,
                     &open_browser,
                     &quit,
@@ -700,6 +821,17 @@ pub fn run() {
                         let app_clone = app.clone();
                         tauri::async_runtime::spawn(async move {
                             let _ = toggle_size_mode(app_clone).await;
+                        });
+                    }
+                    "toggle_mascot" => {
+                        let app_clone = app.clone();
+                        tauri::async_runtime::spawn(async move {
+                            let config = load_config_internal(&app_clone);
+                            if config.size_mode == "mascot" {
+                                let _ = restore_from_mascot(app_clone).await;
+                            } else {
+                                let _ = enter_mascot_mode(app_clone).await;
+                            }
                         });
                     }
                     "open_session" => {
@@ -755,16 +887,45 @@ pub fn run() {
                 });
             }
 
-            // 設定の初期サイズ・アイコンをメインウィンドウに反映
+            // 設定の初期サイズ・位置・アイコンをメインウィンドウに反映
             let config = load_config_internal(handle);
             if let Some(main_win) = app.get_webview_window("main") {
                 let _ = main_win.set_icon(tauri::include_image!("icons/128x128.png"));
                 let (w, h) = if config.size_mode == "large" {
                     (LARGE_WIDTH, LARGE_HEIGHT)
+                } else if config.size_mode == "mascot" {
+                    (MASCOT_WIDTH, MASCOT_HEIGHT)
                 } else {
                     (SMALL_WIDTH, SMALL_HEIGHT)
                 };
                 let _ = main_win.set_size(LogicalSize::new(w, h));
+
+                if config.size_mode == "mascot" {
+                    let target_pos = config.mascot_pos.or_else(|| Some(get_mascot_default_position(&main_win)));
+                    clamp_window_to_monitor(&main_win, target_pos);
+                } else if config.size_mode == "large" {
+                    clamp_window_to_monitor(&main_win, config.large_pos);
+                } else {
+                    clamp_window_to_monitor(&main_win, config.small_pos);
+                }
+
+                // ウィンドウ移動イベントで位置を自動保存
+                let app_handle_for_move = handle.clone();
+                main_win.on_window_event(move |event| {
+                    if let tauri::WindowEvent::Moved(pos) = event {
+                        let mut cfg = load_config_internal(&app_handle_for_move);
+                        if cfg.size_mode == "mascot" {
+                            cfg.mascot_pos = Some((pos.x, pos.y));
+                            let _ = save_config_internal(&app_handle_for_move, &cfg);
+                        } else if cfg.size_mode == "large" {
+                            cfg.large_pos = Some((pos.x, pos.y));
+                            let _ = save_config_internal(&app_handle_for_move, &cfg);
+                        } else if cfg.size_mode == "small" {
+                            cfg.small_pos = Some((pos.x, pos.y));
+                            let _ = save_config_internal(&app_handle_for_move, &cfg);
+                        }
+                    }
+                });
             }
 
             // セッションウィンドウをバックグラウンドで先行初期化
@@ -781,6 +942,9 @@ pub fn run() {
             get_gadget_config,
             save_gadget_config,
             toggle_size_mode,
+            enter_mascot_mode,
+            restore_from_mascot,
+            save_current_window_position,
             open_in_browser,
             open_or_show_session,
             hide_session,

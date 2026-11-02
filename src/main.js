@@ -29,6 +29,14 @@ const avatarVideo = document.getElementById('avatar-video');
 const avatarFallback = document.getElementById('avatar-fallback');
 const btnFetchAvatar = document.getElementById('btn-fetch-avatar');
 const avatarNameEl = document.getElementById('avatar-name');
+const avatarColumn = document.getElementById('avatar-column');
+const mascotRestoreBtn = document.getElementById('mascot-restore-btn');
+
+// マスコット吹き出し要素
+const mascotBubble = document.getElementById('mascot-bubble');
+const mascotBubbleText = document.getElementById('mascot-bubble-text');
+const mascotBubbleCursor = document.getElementById('mascot-bubble-cursor');
+const btnBubbleClose = document.getElementById('btn-bubble-close');
 
 const limitPercentText = document.getElementById('limit-percent-text');
 const limitProgressBar = document.getElementById('limit-progress-bar');
@@ -50,6 +58,101 @@ const healthR5 = document.getElementById('health-r5');
 
 let isSessionVisible = false;
 let currentLimit = 5;
+let lastSeenAssistantText = null;
+let lastKnownAvatarBlobUrl = null;
+let typingTimer = null;
+let autoHideTimer = null;
+
+// ==========================================
+// ルパン風パタパタタイピング吹き出し制御
+// ==========================================
+function cleanMascotMessageText(text) {
+  if (!text) return '';
+  return text
+    .replace(/^[\s\uFEFF\xA0\u3000]+/g, '')  // 先頭の空白・改行・全角スペース・NBSP等を完全に除去
+    .replace(/[\s\uFEFF\xA0\u3000]+$/g, '')  // 末尾の空白を除去
+    .replace(/^[ \t\u3000]+/gm, '');          // 各行頭の不自然なインデントを除去
+}
+
+function updateMascotBubbleDirection() {
+  if (!document.body.classList.contains('mode-mascot')) return;
+  const heroCard = document.getElementById('hero-card');
+  if (!heroCard) return;
+
+  // 画面の右半分（中心より右）にあるかどうか
+  const screenCenter = (window.screen.availLeft || 0) + ((window.screen.availWidth || 1920) / 2);
+  const winCenter = window.screenX + (window.outerWidth / 2);
+
+  if (winCenter > screenCenter) {
+    // 画面の右側にある -> 吹き出しは左側に出す！
+    heroCard.classList.add('bubble-on-left');
+    heroCard.classList.remove('bubble-on-right');
+  } else {
+    // 画面の左側にある -> 吹き出しは右側に出す！
+    heroCard.classList.add('bubble-on-right');
+    heroCard.classList.remove('bubble-on-left');
+  }
+}
+
+function playLupinTyping(text) {
+  if (!mascotBubble || !mascotBubbleText) return;
+  const cleanedText = cleanMascotMessageText(text);
+  if (!cleanedText) return;
+
+  updateMascotBubbleDirection();
+
+  // 進行中のタイマーをクリア
+  if (typingTimer) {
+    clearInterval(typingTimer);
+    typingTimer = null;
+  }
+  if (autoHideTimer) {
+    clearTimeout(autoHideTimer);
+    autoHideTimer = null;
+  }
+
+  mascotBubbleText.textContent = '';
+  mascotBubbleCursor.classList.remove('hidden');
+  mascotBubble.classList.remove('hidden');
+
+  // 目で追うスピードより気持ち早いテンポ
+  // 1文字あたり12ms〜24ms（文字数に応じて適応調整）
+  const delay = Math.min(24, Math.max(10, Math.floor(1600 / Math.max(1, cleanedText.length))));
+
+  let idx = 0;
+  typingTimer = setInterval(() => {
+    if (idx < cleanedText.length) {
+      mascotBubbleText.textContent += cleanedText[idx];
+      idx++;
+      mascotBubbleText.scrollTop = mascotBubbleText.scrollHeight;
+    } else {
+      clearInterval(typingTimer);
+      typingTimer = null;
+      // タイピング完了後、カーソルを少し待って非表示に
+      setTimeout(() => {
+        mascotBubbleCursor.classList.add('hidden');
+      }, 700);
+      // 30秒後に自動的にフェードアウト
+      autoHideTimer = setTimeout(() => {
+        mascotBubble.classList.add('hidden');
+      }, 30000);
+    }
+  }, delay);
+}
+
+function hideMascotBubble() {
+  if (typingTimer) {
+    clearInterval(typingTimer);
+    typingTimer = null;
+  }
+  if (autoHideTimer) {
+    clearTimeout(autoHideTimer);
+    autoHideTimer = null;
+  }
+  if (mascotBubble) {
+    mascotBubble.classList.add('hidden');
+  }
+}
 
 // ==========================================
 // 0. §17 起動時・定期ヘルスチェック & 縮退運転制御
@@ -68,6 +171,18 @@ async function runHealthCheck() {
     if (h.avatar_name && avatarNameEl) {
       avatarNameEl.textContent = h.avatar_name;
     }
+
+    // Muse本体の動画ソース（blob URL）変更を検知して自動追従
+    if (h.avatar_src) {
+      if (lastKnownAvatarBlobUrl && lastKnownAvatarBlobUrl !== h.avatar_src) {
+        lastKnownAvatarBlobUrl = h.avatar_src;
+        // 本体側で動画が切り替わったため再取得して反映
+        loadAvatar(true).catch(() => {});
+      } else if (!lastKnownAvatarBlobUrl) {
+        lastKnownAvatarBlobUrl = h.avatar_src;
+      }
+    }
+
     const isAvatarPlaying = !avatarVideo.classList.contains('hidden') && !!avatarVideo.src;
     const r1Ok = !!h.r1_avatar?.ok || isAvatarPlaying;
     const r1Detail = h.r1_avatar?.ok ? h.r1_avatar.selector : (isAvatarPlaying ? 'cached-video' : 'none');
@@ -121,6 +236,25 @@ async function loadChatMessages() {
   try {
     const messages = await invoke('get_chat_messages', { limit: currentLimit });
     renderMessages(messages);
+
+    // 新着アシスタントメッセージの検知
+    if (messages && messages.length > 0) {
+      const assistantMsgs = messages.filter(m => m.role === 'assistant');
+      const latestAssistant = assistantMsgs.length > 0 ? assistantMsgs[assistantMsgs.length - 1].text : null;
+      if (latestAssistant) {
+        if (lastSeenAssistantText === null) {
+          lastSeenAssistantText = latestAssistant;
+        } else if (latestAssistant !== lastSeenAssistantText) {
+          lastSeenAssistantText = latestAssistant;
+          // 新着メッセージ受信時はMuse本体の動画（発話・表情）も更新されている可能性があるため再同期
+          setTimeout(() => loadAvatar(true).catch(() => {}), 600);
+          if (document.body.classList.contains('mode-mascot')) {
+            playLupinTyping(latestAssistant);
+          }
+        }
+      }
+    }
+
     const now = new Date();
     footerSyncTime.textContent = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')} 同期`;
     statusDot.className = 'status-dot active';
@@ -288,13 +422,39 @@ async function toggleSizeMode() {
   }
 }
 
+async function enterMascotMode() {
+  try {
+    const newMode = await invoke('enter_mascot_mode');
+    applySizeMode(newMode);
+    // マスコットモード移行時、最新のMuseメッセージがあればパタパタ表示
+    if (lastSeenAssistantText) {
+      setTimeout(() => playLupinTyping(lastSeenAssistantText), 300);
+    }
+  } catch (err) {
+    console.error('enterMascotMode error:', err);
+  }
+}
+
+async function restoreFromMascot() {
+  try {
+    const newMode = await invoke('restore_from_mascot');
+    applySizeMode(newMode);
+  } catch (err) {
+    console.error('restoreFromMascot error:', err);
+  }
+}
+
 function applySizeMode(mode) {
-  if (mode === 'large') {
-    document.body.classList.remove('mode-small');
+  document.body.classList.remove('mode-small', 'mode-large', 'mode-mascot');
+  if (mode === 'mascot') {
+    document.body.classList.add('mode-mascot');
+    setTimeout(updateMascotBubbleDirection, 50);
+  } else if (mode === 'large') {
     document.body.classList.add('mode-large');
+    hideMascotBubble();
   } else {
-    document.body.classList.remove('mode-large');
     document.body.classList.add('mode-small');
+    hideMascotBubble();
   }
 }
 
@@ -302,14 +462,58 @@ function applySizeMode(mode) {
 // 初期化 & イベントリスナー
 // ==========================================
 window.addEventListener('DOMContentLoaded', async () => {
-  // ウィンドウドラッグ
+  // ウィンドウドラッグ（通常ヘッダー）
   dragHeader.addEventListener('mousedown', (e) => {
     if (e.target.closest('.header-controls') || e.target.closest('.avatar-wrapper')) return;
     invoke('drag_window').catch(console.error);
   });
 
-  // 最小化 / 閉じる
-  btnMinimize.addEventListener('click', () => invoke('minimize_window'));
+  // マスコットモード時のアバタードラッグ
+  if (avatarColumn) {
+    avatarColumn.addEventListener('mousedown', (e) => {
+      if (e.target.closest('#mascot-restore-btn') || e.target.closest('#btn-fetch-avatar') || e.target.closest('#mascot-bubble')) return;
+      if (document.body.classList.contains('mode-mascot')) {
+        invoke('drag_window').catch(console.error);
+      }
+    });
+  }
+
+  // ドラッグ終了時に位置保存＆吹き出し向きの更新
+  window.addEventListener('mouseup', () => {
+    if (document.body.classList.contains('mode-mascot')) {
+      updateMascotBubbleDirection();
+      invoke('save_current_window_position').catch(() => {});
+    }
+  });
+
+  // 最小化ボタン（マスコットモードへ移行）
+  btnMinimize.addEventListener('click', enterMascotMode);
+
+  // マスコット復元ボタン
+  if (mascotRestoreBtn) {
+    mascotRestoreBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      restoreFromMascot();
+    });
+  }
+
+  // 吹き出しクリック（通常画面へ復帰）
+  if (mascotBubble) {
+    mascotBubble.addEventListener('click', (e) => {
+      if (e.target.closest('#btn-bubble-close')) return;
+      restoreFromMascot();
+    });
+  }
+
+  // 吹き出し閉じるボタン
+  if (btnBubbleClose) {
+    btnBubbleClose.addEventListener('click', (e) => {
+      e.stopPropagation();
+      hideMascotBubble();
+    });
+  }
+
+  // 閉じる
   btnClose.addEventListener('click', () => invoke('close_window'));
 
   // ブラウザで開く (R6)
@@ -331,8 +535,23 @@ window.addEventListener('DOMContentLoaded', async () => {
     await loadUsageLimit(true);
   });
 
-  // アバター再取得
-  avatarContainer.addEventListener('click', () => loadAvatar(true));
+  // アバタークリック（通常時: 再取得 / マスコット時: 通常画面へ復元、右クリックで吹き出し再生）
+  avatarContainer.addEventListener('click', () => {
+    if (document.body.classList.contains('mode-mascot')) {
+      restoreFromMascot();
+    } else {
+      loadAvatar(true);
+    }
+  });
+
+  avatarContainer.addEventListener('contextmenu', (e) => {
+    if (document.body.classList.contains('mode-mascot')) {
+      e.preventDefault();
+      if (lastSeenAssistantText) {
+        playLupinTyping(lastSeenAssistantText);
+      }
+    }
+  });
   if (btnFetchAvatar) {
     btnFetchAvatar.addEventListener('click', (e) => {
       e.stopPropagation();
