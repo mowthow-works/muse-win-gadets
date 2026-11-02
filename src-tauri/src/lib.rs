@@ -66,11 +66,17 @@ pub struct UsageLimitInfo {
     pub updated_at: String,
 }
 
+fn default_avatar_name() -> String {
+    "ラッキー".to_string()
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct GadgetConfig {
     pub size_mode: String, // "small" or "large"
     pub message_limit: usize,
     pub hotkey: String,
+    #[serde(default = "default_avatar_name")]
+    pub avatar_name: String,
     pub last_limit_info: Option<UsageLimitInfo>,
     #[serde(default)]
     pub small_pos: Option<(i32, i32)>,
@@ -84,6 +90,7 @@ impl Default for GadgetConfig {
             size_mode: "small".to_string(),
             message_limit: 5,
             hotkey: "Ctrl+Shift+M".to_string(),
+            avatar_name: default_avatar_name(),
             last_limit_info: None,
             small_pos: None,
             large_pos: None,
@@ -464,7 +471,18 @@ async fn get_usage_limit(
 #[tauri::command]
 async fn check_bridge_health(app: AppHandle) -> Result<serde_json::Value, String> {
     let session = ensure_session_window(&app)?;
-    run_bridge_action(&session, "check_health", &serde_json::json!({}), 6000).await
+    let res = run_bridge_action(&session, "check_health", &serde_json::json!({}), 6000).await?;
+    if let Some(name) = res.get("avatar_name").and_then(|v| v.as_str()) {
+        let trimmed = name.trim();
+        if !trimmed.is_empty() {
+            let mut config = load_config_internal(&app);
+            if config.avatar_name != trimmed {
+                config.avatar_name = trimmed.to_string();
+                let _ = save_config_internal(&app, &config);
+            }
+        }
+    }
+    Ok(res)
 }
 
 #[tauri::command]

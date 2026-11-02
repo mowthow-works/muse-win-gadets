@@ -59,8 +59,19 @@ body.mode-large .hero-card {
   flex-direction: column;
   justify-content: flex-start;
   align-items: center;
-  padding: 24px 16px;
-  gap: 22px;
+  padding: 22px 16px;
+  gap: 18px;
+}
+
+body.mode-large .avatar-column {
+  gap: 10px;
+}
+
+body.mode-large .avatar-name {
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  color: #ffffff;
 }
 
 body.mode-large .avatar-wrapper {
@@ -256,6 +267,22 @@ body {
   display: flex;
   align-items: center;
   gap: 12px;
+}
+
+.avatar-column {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.avatar-name {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: 0.3px;
+  text-align: center;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
 }
 
 .avatar-wrapper {

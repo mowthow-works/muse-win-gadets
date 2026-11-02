@@ -140,15 +140,63 @@ if (!window.__MUSE_PASSIVE_WATCHER__) {
 
 window.__MUSE_BRIDGE__ = {
   /**
-   * §17.3 起動時・定期ヘルスチェック (R1 / R2 / R3 / R5 のセレクタ生存確認)
+   * アバター名称の抽出 (例: "ラッキー")
+   */
+  extractAvatarName() {
+    try {
+      // 1. <video> の祖先コンテナから「リンク済み」の直前行を探す
+      const { el: video } = queryFirst(SELECTORS.avatarVideo);
+      let curr = video ? video.parentElement : null;
+      for (let depth = 0; depth < 6 && curr; depth++) {
+        const lines = (curr.innerText || '')
+          .split(/\n+/)
+          .map(s => s.trim())
+          .filter(s => s.length > 0 && s.length <= 24);
+        const linkIdx = lines.findIndex(l => l.includes('リンク済み'));
+        if (linkIdx > 0) {
+          const candidate = lines[linkIdx - 1];
+          if (candidate && !candidate.includes('招待') && !candidate.includes('チャット')) {
+            window.__MUSE_CACHED_AVATAR_NAME__ = candidate;
+            return candidate;
+          }
+        }
+        curr = curr.parentElement;
+      }
+
+      // 2. ページ内の「リンク済み」要素の親から探す
+      const allEls = Array.from(document.querySelectorAll('span, div, p'));
+      const linkEl = allEls.find(e => e.children.length === 0 && (e.textContent || '').trim() === 'リンク済み');
+      if (linkEl) {
+        let p = linkEl.parentElement;
+        for (let d = 0; d < 4 && p; d++) {
+          const lines = (p.innerText || '')
+            .split(/\n+/)
+            .map(s => s.trim())
+            .filter(s => s.length > 0 && s.length <= 24);
+          const idx = lines.findIndex(l => l.includes('リンク済み'));
+          if (idx > 0) {
+            window.__MUSE_CACHED_AVATAR_NAME__ = lines[idx - 1];
+            return lines[idx - 1];
+          }
+          p = p.parentElement;
+        }
+      }
+    } catch (_) {}
+    return window.__MUSE_CACHED_AVATAR_NAME__ || null;
+  },
+
+  /**
+   * §17.3 起動時・定期ヘルスチェック (R1 / R2 / R3 / R5 のセレクタ生存確認 + アバター名取得)
    */
   async checkHealth() {
     const vFound = queryFirst(SELECTORS.avatarVideo);
     const mFound = queryAllFirst(SELECTORS.messageItems);
     const iFound = queryFirst(SELECTORS.chatInput);
     const sFound = queryFirst(SELECTORS.settingsButton);
+    const avatarName = this.extractAvatarName();
 
     return {
+      avatar_name: avatarName,
       r1_avatar: {
         ok: !!(vFound.el && (vFound.el.currentSrc || vFound.el.src)),
         selector: vFound.selector || 'none'

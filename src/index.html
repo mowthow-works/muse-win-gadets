@@ -27,14 +27,17 @@
 
     <!-- ヒーローカード: アバター (R1) ＆ 利用枠メーター (R5) -->
     <section class="hero-card">
-      <!-- 左側: アバター表示 -->
-      <div class="avatar-wrapper" id="avatar-container" title="クリックでアバター動画を再取得">
-        <video id="avatar-video" class="avatar-video hidden" autoplay loop muted playsinline></video>
-        <div class="avatar-fallback" id="avatar-fallback">
-          <div class="avatar-ring"></div>
-          <span class="avatar-placeholder-text">Muse</span>
-          <button class="avatar-fetch-btn" id="btn-fetch-avatar" title="動画取得">取得</button>
+      <!-- 左側: アバター表示＋名称 -->
+      <div class="avatar-column">
+        <div class="avatar-wrapper" id="avatar-container" title="クリックでアバター動画を再取得">
+          <video id="avatar-video" class="avatar-video hidden" autoplay loop muted playsinline></video>
+          <div class="avatar-fallback" id="avatar-fallback">
+            <div class="avatar-ring"></div>
+            <span class="avatar-placeholder-text">Muse</span>
+            <button class="avatar-fetch-btn" id="btn-fetch-avatar" title="動画取得">取得</button>
+          </div>
         </div>
+        <div class="avatar-name" id="avatar-name">ラッキー</div>
       </div>
 
       <!-- 右側: 利用枠メーター -->

@@ -28,6 +28,7 @@ const avatarContainer = document.getElementById('avatar-container');
 const avatarVideo = document.getElementById('avatar-video');
 const avatarFallback = document.getElementById('avatar-fallback');
 const btnFetchAvatar = document.getElementById('btn-fetch-avatar');
+const avatarNameEl = document.getElementById('avatar-name');
 
 const limitPercentText = document.getElementById('limit-percent-text');
 const limitProgressBar = document.getElementById('limit-progress-bar');
@@ -64,6 +65,9 @@ async function runHealthCheck() {
   try {
     const h = await invoke('check_bridge_health');
     if (!h) return;
+    if (h.avatar_name && avatarNameEl) {
+      avatarNameEl.textContent = h.avatar_name;
+    }
     const isAvatarPlaying = !avatarVideo.classList.contains('hidden') && !!avatarVideo.src;
     const r1Ok = !!h.r1_avatar?.ok || isAvatarPlaying;
     const r1Detail = h.r1_avatar?.ok ? h.r1_avatar.selector : (isAvatarPlaying ? 'cached-video' : 'none');
@@ -365,6 +369,9 @@ window.addEventListener('DOMContentLoaded', async () => {
       if (config.message_limit) {
         currentLimit = config.message_limit;
         msgLimitSelect.value = String(currentLimit);
+      }
+      if (config.avatar_name && avatarNameEl) {
+        avatarNameEl.textContent = config.avatar_name;
       }
     }
   } catch (e) {
