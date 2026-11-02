@@ -681,3 +681,34 @@ kbd {
   font-size: 9px;
   color: var(--text-muted);
 }
+
+/* §17 ヘルスチェックバッジ */
+.health-badges {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.health-pill {
+  font-size: 8.5px;
+  font-family: Consolas, monospace;
+  font-weight: 600;
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-muted);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  transition: all 0.2s ease;
+}
+
+.health-pill.ok {
+  background: rgba(16, 185, 129, 0.15);
+  color: #34d399;
+  border-color: rgba(16, 185, 129, 0.35);
+}
+
+.health-pill.degraded {
+  background: rgba(245, 158, 11, 0.2);
+  color: #fbbf24;
+  border-color: rgba(245, 158, 11, 0.45);
+}

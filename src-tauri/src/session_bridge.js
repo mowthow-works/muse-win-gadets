@@ -1,14 +1,117 @@
 /**
  * session_bridge.js
- * 
+ *
  * Muse (https://muse.ai/?__pwa=1) のセッション WebView 内で実行される DOM 調査・操作スクリプト。
- * DOM セレクタとリモート処理はすべて本ファイルに集約されます。
- * 
+ * 設計書 §4・§16・§17 に従い、DOM セレクタとリモート処理はすべて本ファイルに集約されます。
+ *
  * 通信方式: Document Title Bridge (即時通信 + チャンク分割ハンドシェイク Pull)
  */
 
 window.__MUSE_STORE__ = window.__MUSE_STORE__ || {};
 window.__MUSE_CACHED_LIMIT__ = window.__MUSE_CACHED_LIMIT__ || null;
+
+/**
+ * §17.2 セレクタの多重化定義
+ * アクセシビリティ向け属性 (aria-label, placeholder, .sr-only) を最優先し、
+ * 変更されやすいクラス名 (hatch-*, group/msg) は予備候補として定義。
+ */
+const SELECTORS = {
+  avatarVideo: [
+    'video[src^="blob:"]',
+    'video'
+  ],
+  messageItems: [
+    '[class*="group/msg"]',
+    'main [ data-message-id ]'
+  ],
+  messageBubble: [
+    '.prose',
+    '[class*="hatch-chat-groupable-bubble"]'
+  ],
+  chatInput: [
+    'textarea[placeholder*="メッセージ"]',
+    'textarea[aria-label*="メッセージ"]',
+    '[role="textbox"][aria-label*="メッセージ"]',
+    'main textarea',
+    'textarea:not([readonly])'
+  ],
+  sendButton: [
+    'button[aria-label="送信"]:not([disabled])',
+    'button[aria-label*="送信"]:not([disabled])',
+    'button[aria-label*="send" i]:not([disabled])',
+    'button[type="submit"]:not([disabled])'
+  ],
+  settingsButton: [
+    'button[aria-label="設定"]',
+    'a[aria-label="設定"]',
+    'button.hatch-dock-reveal-item[aria-label="設定"]'
+  ],
+  chatNavButton: [
+    'button[aria-label="チャット"]',
+    'a[aria-label="チャット"]'
+  ],
+  modalCloseButton: [
+    '[role="dialog"] button[aria-label="閉じる"]',
+    '[role="dialog"] button[aria-label*="close" i]',
+    'button[aria-label="閉じる"]'
+  ]
+};
+
+function queryFirst(candidates, root = document) {
+  for (const sel of candidates) {
+    try {
+      const el = root.querySelector(sel);
+      if (el) return { el, selector: sel };
+    } catch (_) {}
+  }
+  return { el: null, selector: null };
+}
+
+function queryAllFirst(candidates, root = document) {
+  for (const sel of candidates) {
+    try {
+      const list = Array.from(root.querySelectorAll(sel));
+      if (list.length > 0) return { list, selector: sel };
+    } catch (_) {}
+  }
+  // フォールバック: sr-only で「自分:」「アシスタントメッセージ:」を持つ要素の親
+  try {
+    const srSpans = Array.from(root.querySelectorAll('span.sr-only')).filter(s => {
+      const t = (s.textContent || '').trim();
+      return t.startsWith('自分:') || t.startsWith('アシスタントメッセージ:');
+    });
+    if (srSpans.length > 0) {
+      return {
+        list: srSpans.map(s => s.parentElement).filter(Boolean),
+        selector: 'span.sr-only->parentElement'
+      };
+    }
+  } catch (_) {}
+  return { list: [], selector: null };
+}
+
+function triggerReactClick(el) {
+  if (!el) return;
+  try { el.click(); } catch (_) {}
+  const opts = { bubbles: true, cancelable: true, view: window };
+  el.dispatchEvent(new PointerEvent('pointerdown', opts));
+  el.dispatchEvent(new MouseEvent('mousedown', opts));
+  el.dispatchEvent(new PointerEvent('pointerup', opts));
+  el.dispatchEvent(new MouseEvent('mouseup', opts));
+  el.dispatchEvent(new MouseEvent('click', opts));
+  const reactKey = Object.keys(el).find(k => k.startsWith('__reactProps$'));
+  if (reactKey && typeof el[reactKey]?.onClick === 'function') {
+    try {
+      el[reactKey].onClick({
+        preventDefault() {},
+        stopPropagation() {},
+        currentTarget: el,
+        target: el,
+        nativeEvent: new MouseEvent('click')
+      });
+    } catch (_) {}
+  }
+}
 
 // パッシブ監視: ユーザーまたはスクリプトが「設定 ＞ 一般」を開いた際に自動的に利用枠をキャッシュ
 if (!window.__MUSE_PASSIVE_WATCHER__) {
@@ -37,21 +140,52 @@ if (!window.__MUSE_PASSIVE_WATCHER__) {
 
 window.__MUSE_BRIDGE__ = {
   /**
+   * §17.3 起動時・定期ヘルスチェック (R1 / R2 / R3 / R5 のセレクタ生存確認)
+   */
+  async checkHealth() {
+    const vFound = queryFirst(SELECTORS.avatarVideo);
+    const mFound = queryAllFirst(SELECTORS.messageItems);
+    const iFound = queryFirst(SELECTORS.chatInput);
+    const sFound = queryFirst(SELECTORS.settingsButton);
+
+    return {
+      r1_avatar: {
+        ok: !!(vFound.el && (vFound.el.currentSrc || vFound.el.src)),
+        selector: vFound.selector || 'none'
+      },
+      r2_messages: {
+        ok: mFound.list.length > 0 || !!iFound.el,
+        count: mFound.list.length,
+        selector: mFound.selector || 'none'
+      },
+      r3_input: {
+        ok: !!iFound.el,
+        selector: iFound.selector || 'none'
+      },
+      r5_limit: {
+        ok: !!sFound.el || !!window.__MUSE_CACHED_LIMIT__,
+        cached: !!window.__MUSE_CACHED_LIMIT__,
+        selector: sFound.selector || 'none'
+      }
+    };
+  },
+
+  /**
    * 1. アバター動画 (R1) の Base64 Data URL 取得
    */
   async getAvatarVideoBase64() {
-    const video = document.querySelector('video');
+    const { el: video } = queryFirst(SELECTORS.avatarVideo);
     if (!video) {
-      throw new Error("No video element found in DOM");
+      throw new Error("UNSUPPORTED_DOM: アバター動画要素が見つかりません");
     }
     const src = video.currentSrc || video.src;
     if (!src) {
-      throw new Error("Video element has no src");
+      throw new Error("UNSUPPORTED_DOM: アバター動画の src が空です");
     }
 
     const response = await fetch(src);
     if (!response.ok) {
-      throw new Error(`Failed to fetch video blob: ${response.status} ${response.statusText}`);
+      throw new Error(`Failed to fetch video blob: ${response.status}`);
     }
     const blob = await response.blob();
 
@@ -73,11 +207,17 @@ window.__MUSE_BRIDGE__ = {
    * 2. メインチャットのメッセージ一覧読み取り (R2)
    */
   async getMessages(limit = 5) {
-    const messageEls = Array.from(document.querySelectorAll('[class*="group/msg"]'));
+    const { list: messageEls } = queryAllFirst(SELECTORS.messageItems);
+    const { el: inputEl } = queryFirst(SELECTORS.chatInput);
+
+    // メッセージも入力欄も見つからない場合は未ログインまたは未対応画面構造
+    if (messageEls.length === 0 && !inputEl) {
+      throw new Error("UNSUPPORTED_OR_UNAUTH: メインチャットの画面構造が見つかりません");
+    }
+
     const messages = [];
 
     for (const el of messageEls) {
-      // 送信者判定: sr-only ラベルと .prose の有無で厳密に判定
       const srEl = el.querySelector('.sr-only');
       const srText = srEl ? (srEl.textContent || '').trim() : '';
       const hasProse = !!el.querySelector('.prose');
@@ -85,11 +225,9 @@ window.__MUSE_BRIDGE__ = {
       const isUser = srText.startsWith('自分:') || (!hasProse && rawElText.startsWith('自分:'));
       const role = isUser ? 'user' : 'assistant';
 
-      // 本文抽出
-      const bubbleEl = el.querySelector('[class*="hatch-chat-groupable-bubble"], .prose');
+      const { el: bubbleEl } = queryFirst(SELECTORS.messageBubble, el);
       let rawText = bubbleEl ? (bubbleEl.innerText || '') : rawElText;
 
-      // プレフィックスのクリーニング
       const text = rawText
         .replace(/^(自分:|アシスタントメッセージ:)\s*/i, '')
         .trim();
@@ -99,26 +237,25 @@ window.__MUSE_BRIDGE__ = {
       }
     }
 
-    // 最新 limit 件を取り出す
     const parsedLimit = Number(limit) || 5;
     return messages.slice(-parsedLimit);
   },
 
   /**
-   * 3. メインチャットへのメッセージ入力・送信 (R3)
+   * 3. メインチャットへのメッセージ入力・送信 (R3) + 失敗検知 (§4)
    */
   async sendMessage(text) {
     if (!text || typeof text !== 'string') {
-      throw new Error("Message text is empty or invalid");
+      throw new Error("Message text is empty");
     }
 
-    const ta = document.querySelector('textarea[placeholder*="メッセージ"]') ||
-               document.querySelector('textarea');
+    const { el: ta } = queryFirst(SELECTORS.chatInput);
     if (!ta) {
-      throw new Error("Input textarea not found in DOM");
+      throw new Error("UNSUPPORTED_DOM: 未対応の画面構造です（入力欄が見つかりません）");
     }
 
-    // React 16+ 向け native value setter の呼び出し
+    const beforeCount = queryAllFirst(SELECTORS.messageItems).list.length;
+
     const valueSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set;
     if (valueSetter) {
       valueSetter.call(ta, text);
@@ -129,34 +266,39 @@ window.__MUSE_BRIDGE__ = {
     ta.dispatchEvent(new Event('input', { bubbles: true }));
     ta.dispatchEvent(new Event('change', { bubbles: true }));
 
-    // UI 反映を待機 (180ms)
     await new Promise(r => setTimeout(r, 180));
 
-    // 送信ボタンの検索
-    const sendBtn = document.querySelector('button[aria-label="送信"]:not([disabled])') ||
-                    document.querySelector('button[aria-label*="send" i]:not([disabled])');
-
+    const { el: sendBtn } = queryFirst(SELECTORS.sendButton);
     if (sendBtn) {
       sendBtn.click();
     } else {
-      // Enter キー押下シミュレーション
       ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
     }
 
-    return { success: true, textSent: text };
+    // §4 失敗検知: 送信後に入力欄がクリアされたか、メッセージ数が増えたかを確認
+    for (let i = 0; i < 10; i++) {
+      await new Promise(r => setTimeout(r, 150));
+      const afterCount = queryAllFirst(SELECTORS.messageItems).list.length;
+      const currentVal = (ta.value || '').trim();
+      if (afterCount > beforeCount || currentVal === '') {
+        return { success: true, verified: true, textSent: text };
+      }
+    }
+
+    throw new Error("SEND_VERIFY_FAILED: 送信後にメッセージの反映を確認できませんでした");
   },
 
   /**
-   * 4. ウィンドウリミット（利用枠）の取得 (R5)
+   * 4. ウィンドウリミット（利用枠）の取得 (R5, §16 ガードレール対応)
+   * @param {boolean} passiveOnly true の場合は画面遷移（設定クリック）を一切行わない（ガードレール①）
    */
-  async fetchUsageLimit() {
+  async fetchUsageLimit(passiveOnly = false) {
     const scanDomForLimit = () => {
       let planName = '';
       let usedPercent = null;
       let remainingPercent = null;
       let resetText = '';
 
-      // プラン名
       const planEl = document.querySelector('span.text-body.text-text-primary, [class*="plan" i]');
       if (planEl) {
         const t = (planEl.textContent || '').trim();
@@ -165,14 +307,12 @@ window.__MUSE_BRIDGE__ = {
         }
       }
 
-      // ページ内のテキストをスキャン
       const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
       let node;
       while ((node = walker.nextNode())) {
         const txt = (node.textContent || '').trim();
         if (!txt) continue;
 
-        // 使用率の検索 (例: "17%使用済み")
         if (usedPercent === null) {
           const matchUsed = txt.match(/(\d+)\s*%\s*使用済み/i);
           if (matchUsed) {
@@ -181,7 +321,6 @@ window.__MUSE_BRIDGE__ = {
           }
         }
 
-        // リセット日の検索 (例: "1週間の上限は11月6日にリセットされます")
         if (!resetText) {
           const matchReset = txt.match(/(\d+週間の上限は[^\n。]*リセットされます|\d+月\d+日にリセットされます)/);
           if (matchReset) {
@@ -208,50 +347,48 @@ window.__MUSE_BRIDGE__ = {
       return immediate;
     }
 
-    // 2. なければ「設定 ＞ 一般」を自動で開いて確認を試みる
-    const triggerClick = (el) => {
-      if (!el) return;
-      try { el.click(); } catch (_) {}
-      const opts = { bubbles: true, cancelable: true, view: window };
-      el.dispatchEvent(new PointerEvent('pointerdown', opts));
-      el.dispatchEvent(new MouseEvent('mousedown', opts));
-      el.dispatchEvent(new PointerEvent('pointerup', opts));
-      el.dispatchEvent(new MouseEvent('mouseup', opts));
-      el.dispatchEvent(new MouseEvent('click', opts));
-      // React Fiber onClick 直接呼び出し
-      const reactKey = Object.keys(el).find(k => k.startsWith('__reactProps$'));
-      if (reactKey && typeof el[reactKey]?.onClick === 'function') {
-        try {
-          el[reactKey].onClick({
-            preventDefault() {},
-            stopPropagation() {},
-            currentTarget: el,
-            target: el,
-            nativeEvent: new MouseEvent('click')
-          });
-        } catch (_) {}
-      }
-    };
+    // ガードレール①: session WebView が可視中 (passiveOnly === true) の場合は自動遷移しない
+    if (passiveOnly) {
+      return window.__MUSE_CACHED_LIMIT__ || immediate || {
+        plan_name: '無料プラン',
+        used_percent: null,
+        remaining_percent: null,
+        reset_text: 'セッション画面の[設定>一般]で自動取得'
+      };
+    }
 
-    const settingsBtn = document.querySelector('button.hatch-dock-reveal-item[aria-label="設定"], button[aria-label="設定"]');
+    // 2. 非表示時は「設定 ＞ 一般」を開いて確認し、ガードレール③に従いメインチャットへ明示的に戻す
+    const { el: settingsBtn } = queryFirst(SELECTORS.settingsButton);
     if (settingsBtn) {
-      triggerClick(settingsBtn);
+      triggerReactClick(settingsBtn);
       await new Promise(r => setTimeout(r, 500));
 
-      // 「一般」タブらしき要素をクリック
       const tabs = Array.from(document.querySelectorAll('button, a, [role="button"], [role="menuitem"], div, span'));
       const generalTab = tabs.find(t => t.children.length === 0 && (t.textContent || '').trim() === '一般');
       if (generalTab) {
-        triggerClick(generalTab);
+        triggerReactClick(generalTab);
         await new Promise(r => setTimeout(r, 550));
       }
 
-      // 再度スキャン
       const afterClick = scanDomForLimit();
 
-      // Escape キーでモーダルを閉じる
+      // §16 ガードレール③: Escape 任せにせず、閉じるボタン＋Escape＋チャットナビゲーションで明示的にメインチャットへ戻す
+      const { el: closeBtn } = queryFirst(SELECTORS.modalCloseButton);
+      if (closeBtn) {
+        triggerReactClick(closeBtn);
+      }
       document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true }));
       await new Promise(r => setTimeout(r, 250));
+
+      // もしメインチャットの入力欄が見えていなければ、左ドックの「チャット」ボタンを明示的にクリック
+      const { el: inputAfter } = queryFirst(SELECTORS.chatInput);
+      if (!inputAfter) {
+        const { el: chatNav } = queryFirst(SELECTORS.chatNavButton);
+        if (chatNav) {
+          triggerReactClick(chatNav);
+          await new Promise(r => setTimeout(r, 300));
+        }
+      }
 
       if (afterClick && afterClick.used_percent !== null) {
         window.__MUSE_CACHED_LIMIT__ = afterClick;
@@ -263,7 +400,6 @@ window.__MUSE_BRIDGE__ = {
       return window.__MUSE_CACHED_LIMIT__;
     }
 
-    // スキャンで見つかった部分情報またはデフォルト
     return immediate || {
       plan_name: '無料プラン',
       used_percent: null,
@@ -280,6 +416,9 @@ window.__MUSE_BRIDGE__ = {
     try {
       let result;
       switch (action) {
+        case 'check_health':
+          result = await this.checkHealth();
+          break;
         case 'get_avatar':
           result = await this.getAvatarVideoBase64();
           break;
@@ -290,7 +429,7 @@ window.__MUSE_BRIDGE__ = {
           result = await this.sendMessage(args?.text);
           break;
         case 'fetch_limit':
-          result = await this.fetchUsageLimit();
+          result = await this.fetchUsageLimit(!!args?.passiveOnly);
           break;
         default:
           throw new Error(`Unknown action: ${action}`);
@@ -305,37 +444,29 @@ window.__MUSE_BRIDGE__ = {
     }
 
     const encoded = encodeURIComponent(JSON.stringify(payload));
-    const CHUNK_SIZE = 3000;
+    const CHUNK_SIZE = 2800;
 
     if (encoded.length <= CHUNK_SIZE) {
-      // 1チャンクで収まる場合は即座にタイトルに設定
       document.title = `__MUSE_RES__:${nonce}:${encoded}`;
     } else {
-      // チャンク分割ハンドシェイク待機
       window.__MUSE_STORE__[nonce] = encoded;
       const total = Math.ceil(encoded.length / CHUNK_SIZE);
       document.title = `__MUSE_CHUNK_READY__:${nonce}:${total}`;
     }
   },
 
-  /**
-   * チャンク要求に応答するヘルパー (Rust から呼び出される)
-   */
   serveChunk(nonce, idx) {
     const data = window.__MUSE_STORE__[nonce];
     if (!data) {
       document.title = `__MUSE_CHUNK__:${nonce}:${idx}:ERROR_NO_DATA`;
       return;
     }
-    const CHUNK_SIZE = 3000;
+    const CHUNK_SIZE = 2800;
     const start = idx * CHUNK_SIZE;
     const chunk = data.slice(start, start + CHUNK_SIZE);
     document.title = `__MUSE_CHUNK__:${nonce}:${idx}:${chunk}`;
   },
 
-  /**
-   * 後片付け (Rust から呼び出される)
-   */
   cleanup(nonce) {
     delete window.__MUSE_STORE__[nonce];
     if (document.title.startsWith('__MUSE_')) {

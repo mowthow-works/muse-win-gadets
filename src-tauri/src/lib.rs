@@ -395,7 +395,15 @@ async fn get_usage_limit(
     }
 
     let session = ensure_session_window(&app)?;
-    let res = run_bridge_action(&session, "fetch_limit", &serde_json::json!({}), 12000).await?;
+    // §16 ガードレール①: session WebView が可視状態（フルUI表示中）のときは自動画面遷移を抑止
+    let is_session_visible = session.is_visible().unwrap_or(false);
+    let res = run_bridge_action(
+        &session,
+        "fetch_limit",
+        &serde_json::json!({ "passiveOnly": is_session_visible }),
+        12000,
+    )
+    .await?;
 
     let plan_name = res
         .get("plan_name")
@@ -451,6 +459,12 @@ async fn get_usage_limit(
     }
 
     Ok(info)
+}
+
+#[tauri::command]
+async fn check_bridge_health(app: AppHandle) -> Result<serde_json::Value, String> {
+    let session = ensure_session_window(&app)?;
+    run_bridge_action(&session, "check_health", &serde_json::json!({}), 6000).await
 }
 
 #[tauri::command]
@@ -736,6 +750,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            check_bridge_health,
             get_avatar_data_url,
             get_chat_messages,
             send_chat_message,

@@ -42,8 +42,50 @@ const chatInput = document.getElementById('chat-input');
 const btnSendMessage = document.getElementById('btn-send-message');
 const footerSyncTime = document.getElementById('footer-sync-time');
 
+const healthR1 = document.getElementById('health-r1');
+const healthR2 = document.getElementById('health-r2');
+const healthR3 = document.getElementById('health-r3');
+const healthR5 = document.getElementById('health-r5');
+
 let isSessionVisible = false;
 let currentLimit = 5;
+
+// ==========================================
+// 0. §17 起動時・定期ヘルスチェック & 縮退運転制御
+// ==========================================
+function setHealthPill(el, label, ok, detail) {
+  if (!el) return;
+  el.textContent = ok ? `${label}✓` : `${label}⚠`;
+  el.className = `health-pill ${ok ? 'ok' : 'degraded'}`;
+  el.title = `${label}: ${ok ? '正常' : '未検出/縮退中'} (${detail || ''})`;
+}
+
+async function runHealthCheck() {
+  try {
+    const h = await invoke('check_bridge_health');
+    if (!h) return;
+    const isAvatarPlaying = !avatarVideo.classList.contains('hidden') && !!avatarVideo.src;
+    const r1Ok = !!h.r1_avatar?.ok || isAvatarPlaying;
+    const r1Detail = h.r1_avatar?.ok ? h.r1_avatar.selector : (isAvatarPlaying ? 'cached-video' : 'none');
+    setHealthPill(healthR1, 'R1', r1Ok, r1Detail);
+    setHealthPill(healthR2, 'R2', !!h.r2_messages?.ok, h.r2_messages?.selector);
+    setHealthPill(healthR3, 'R3', !!h.r3_input?.ok, h.r3_input?.selector);
+    setHealthPill(healthR5, 'R5', !!h.r5_limit?.ok, h.r5_limit?.selector);
+
+    // §17.1 R3（入力欄）の縮退運転: セレクタが見つからない場合は誤送信を防ぎ明示する
+    if (h.r3_input && !h.r3_input.ok) {
+      chatInput.disabled = true;
+      btnSendMessage.disabled = true;
+      chatInput.placeholder = '⚠ 入力欄が未検出です（[🖥️] 公式画面をご利用ください）';
+    } else {
+      chatInput.disabled = false;
+      btnSendMessage.disabled = false;
+      chatInput.placeholder = 'Muse にメッセージを入力... (Enterで送信)';
+    }
+  } catch (err) {
+    console.warn('runHealthCheck error:', err);
+  }
+}
 
 // ==========================================
 // 1. アバター動画 (R1)
@@ -279,6 +321,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   btnRefreshAll.addEventListener('click', async () => {
     btnRefreshAll.style.transform = 'rotate(180deg)';
     setTimeout(() => { btnRefreshAll.style.transform = ''; }, 300);
+    await runHealthCheck();
     await loadChatMessages();
     await loadAvatar(false);
     await loadUsageLimit(true);
@@ -331,23 +374,36 @@ window.addEventListener('DOMContentLoaded', async () => {
   // 初期データ取得（直列実行＋セッションWebViewのロード待ちリトライ）
   const syncAllSequential = async (forceLimit = false) => {
     await updateSessionStatus();
-    await loadChatMessages();
     await loadAvatar(false);
     await loadUsageLimit(forceLimit);
+    await loadChatMessages();
+    await runHealthCheck();
   };
 
-  setTimeout(() => syncAllSequential(false), 1500);
-  setTimeout(() => syncAllSequential(true), 4500);
+  // キャッシュ済みのアバターと利用枠を即時表示
+  loadAvatar(false);
+  loadUsageLimit(false);
 
-  // 12 秒ごとの自動バックグラウンド同期
+  // セッションWebViewのロード完了に合わせて段階的にチャットとヘルスチェックを同期
+  setTimeout(() => syncAllSequential(false), 1800);
+  setTimeout(() => syncAllSequential(false), 4000);
+  setTimeout(() => syncAllSequential(false), 7000);
+
+  // 12 秒ごとの自動バックグラウンド同期（チャット＆ヘルスチェック）
   setInterval(async () => {
     await updateSessionStatus();
+    await runHealthCheck();
     await loadChatMessages();
     if (avatarVideo.classList.contains('hidden')) {
       await loadAvatar(false);
     }
-    if (limitPercentText.textContent === '--%') {
+  }, 12000);
+
+  // §16 10 分ごとの利用枠定期自動取得（ガードレール①: セッション画面が非表示のときのみ実行）
+  setInterval(async () => {
+    await updateSessionStatus();
+    if (!isSessionVisible) {
       await loadUsageLimit(true);
     }
-  }, 12000);
+  }, 600000);
 });
