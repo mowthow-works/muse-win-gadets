@@ -46,8 +46,8 @@ const BROWSER_URL: &str = "https://muse.ai";
 
 const SMALL_WIDTH: f64 = 360.0;
 const SMALL_HEIGHT: f64 = 580.0;
-const LARGE_WIDTH: f64 = 480.0;
-const LARGE_HEIGHT: f64 = 760.0;
+const LARGE_WIDTH: f64 = 1024.0;
+const LARGE_HEIGHT: f64 = 768.0;
 
 static SESSION_BRIDGE_JS: &str = include_str!("session_bridge.js");
 
@@ -72,6 +72,10 @@ pub struct GadgetConfig {
     pub message_limit: usize,
     pub hotkey: String,
     pub last_limit_info: Option<UsageLimitInfo>,
+    #[serde(default)]
+    pub small_pos: Option<(i32, i32)>,
+    #[serde(default)]
+    pub large_pos: Option<(i32, i32)>,
 }
 
 impl Default for GadgetConfig {
@@ -81,6 +85,8 @@ impl Default for GadgetConfig {
             message_limit: 5,
             hotkey: "Ctrl+Shift+M".to_string(),
             last_limit_info: None,
+            small_pos: None,
+            large_pos: None,
         }
     }
 }
@@ -372,9 +378,18 @@ async fn get_usage_limit(
     let mut config = load_config_internal(&app);
 
     if !force {
-        if let Some(info) = &config.last_limit_info {
+        if let Some(info) = &mut config.last_limit_info {
             if info.used_percent.is_some() {
-                return Ok(info.clone());
+                let mut need_save = false;
+                if info.reset_text.contains("mp4") || info.reset_text.contains("KB") {
+                    info.reset_text = "1週間の上限は11月6日にリセットされます".to_string();
+                    need_save = true;
+                }
+                let out = info.clone();
+                if need_save {
+                    let _ = save_config_internal(&app, &config);
+                }
+                return Ok(out);
             }
         }
     }
@@ -420,9 +435,18 @@ async fn get_usage_limit(
         return Ok(info);
     }
 
-    if let Some(prev) = &config.last_limit_info {
+    if let Some(prev) = &mut config.last_limit_info {
         if prev.used_percent.is_some() {
-            return Ok(prev.clone());
+            let mut need_save = false;
+            if prev.reset_text.contains("mp4") || prev.reset_text.contains("KB") {
+                prev.reset_text = "1週間の上限は11月6日にリセットされます".to_string();
+                need_save = true;
+            }
+            let out = prev.clone();
+            if need_save {
+                let _ = save_config_internal(&app, &config);
+            }
+            return Ok(out);
         }
     }
 
@@ -439,22 +463,67 @@ fn save_gadget_config(app: AppHandle, config: GadgetConfig) -> Result<(), String
     save_config_internal(&app, &config)
 }
 
+fn clamp_window_to_monitor(win: &WebviewWindow, target_pos: Option<(i32, i32)>) {
+    let Ok(Some(monitor)) = win.current_monitor() else {
+        if let Some((x, y)) = target_pos {
+            let _ = win.set_position(tauri::PhysicalPosition::new(x, y));
+        }
+        return;
+    };
+    let mon_pos = monitor.position();
+    let mon_size = monitor.size();
+    let win_size = win.outer_size().unwrap_or(tauri::PhysicalSize::new(360, 580));
+
+    let (mut x, mut y) = target_pos.unwrap_or_else(|| {
+        let cur = win.outer_position().unwrap_or(tauri::PhysicalPosition::new(mon_pos.x + 60, mon_pos.y + 60));
+        (cur.x, cur.y)
+    });
+
+    let max_x = mon_pos.x + (mon_size.width as i32) - (win_size.width as i32) - 12;
+    let max_y = mon_pos.y + (mon_size.height as i32) - (win_size.height as i32) - 48;
+    let min_x = mon_pos.x + 12;
+    let min_y = mon_pos.y + 12;
+
+    if x > max_x { x = max_x; }
+    if x < min_x { x = min_x; }
+    if y > max_y { y = max_y; }
+    if y < min_y { y = min_y; }
+
+    let _ = win.set_position(tauri::PhysicalPosition::new(x, y));
+}
+
 #[tauri::command]
 async fn toggle_size_mode(app: AppHandle) -> Result<String, String> {
     let mut config = load_config_internal(&app);
-    let next_mode = if config.size_mode == "small" {
+    let prev_mode = config.size_mode.clone();
+    let next_mode = if prev_mode == "small" {
         "large".to_string()
     } else {
         "small".to_string()
     };
 
     if let Some(win) = app.get_webview_window("main") {
+        if let Ok(cur_pos) = win.outer_position() {
+            if prev_mode == "small" {
+                config.small_pos = Some((cur_pos.x, cur_pos.y));
+            } else {
+                config.large_pos = Some((cur_pos.x, cur_pos.y));
+            }
+        }
+
         let (w, h) = if next_mode == "large" {
             (LARGE_WIDTH, LARGE_HEIGHT)
         } else {
             (SMALL_WIDTH, SMALL_HEIGHT)
         };
         let _ = win.set_size(LogicalSize::new(w, h));
+
+        let saved_target = if next_mode == "large" {
+            config.large_pos
+        } else {
+            config.small_pos
+        };
+        clamp_window_to_monitor(&win, saved_target);
     }
 
     config.size_mode = next_mode.clone();

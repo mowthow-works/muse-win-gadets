@@ -19,7 +19,7 @@ if (!window.__MUSE_PASSIVE_WATCHER__) {
       if (matchUsed) {
         const usedPercent = parseInt(matchUsed[1], 10);
         const remainingPercent = Math.max(0, 100 - usedPercent);
-        const matchReset = bodyText.match(/([^\n]*リセットされます)/);
+        const matchReset = bodyText.match(/(\d+週間の上限は[^\n。]*リセットされます|\d+月\d+日にリセットされます)/);
         const planEl = document.querySelector('span.text-body.text-text-primary');
         const planName = planEl && (planEl.textContent || '').includes('プラン')
           ? planEl.textContent.trim()
@@ -77,14 +77,17 @@ window.__MUSE_BRIDGE__ = {
     const messages = [];
 
     for (const el of messageEls) {
-      // 送信者判定
-      const isUser = String(el.className).includes('flex-col') ||
-                     (el.innerText || '').trim().startsWith('自分:');
+      // 送信者判定: sr-only ラベルと .prose の有無で厳密に判定
+      const srEl = el.querySelector('.sr-only');
+      const srText = srEl ? (srEl.textContent || '').trim() : '';
+      const hasProse = !!el.querySelector('.prose');
+      const rawElText = (el.innerText || '').trim();
+      const isUser = srText.startsWith('自分:') || (!hasProse && rawElText.startsWith('自分:'));
       const role = isUser ? 'user' : 'assistant';
 
       // 本文抽出
       const bubbleEl = el.querySelector('[class*="hatch-chat-groupable-bubble"], .prose');
-      let rawText = bubbleEl ? (bubbleEl.innerText || '') : (el.innerText || '');
+      let rawText = bubbleEl ? (bubbleEl.innerText || '') : rawElText;
 
       // プレフィックスのクリーニング
       const text = rawText
@@ -179,8 +182,11 @@ window.__MUSE_BRIDGE__ = {
         }
 
         // リセット日の検索 (例: "1週間の上限は11月6日にリセットされます")
-        if (!resetText && txt.includes('リセットされます')) {
-          resetText = txt;
+        if (!resetText) {
+          const matchReset = txt.match(/(\d+週間の上限は[^\n。]*リセットされます|\d+月\d+日にリセットされます)/);
+          if (matchReset) {
+            resetText = matchReset[1].trim();
+          }
         }
       }
 
