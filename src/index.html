@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Muse Desktop Gadget</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body class="mode-small">
+  <div class="gadget-container">
+    <!-- ヘッダー（ウィンドウドラッグ領域） -->
+    <header class="gadget-header" id="drag-header">
+      <div class="brand-group">
+        <div class="status-dot warning" id="status-dot" title="接続状態"></div>
+        <span class="app-title">Muse</span>
+        <span class="plan-badge" id="plan-badge">無料プラン</span>
+      </div>
+      <div class="header-controls">
+        <button class="icon-btn" id="btn-open-browser" title="ブラウザで Muse を開く (R6)">🌐</button>
+        <button class="icon-btn" id="btn-toggle-session" title="セッション画面 (公式UI / ログイン)">🖥️</button>
+        <button class="icon-btn" id="btn-refresh-all" title="すべて即時同期">↻</button>
+        <button class="icon-btn" id="btn-toggle-size" title="サイズ切替 (小 ⇄ 大, R7)">⤢</button>
+        <button class="win-btn" id="btn-minimize" title="最小化">−</button>
+        <button class="win-btn close" id="btn-close" title="閉じる">×</button>
+      </div>
+    </header>
+
+    <!-- ヒーローカード: アバター (R1) ＆ 利用枠メーター (R5) -->
+    <section class="hero-card">
+      <!-- 左側: アバター表示 -->
+      <div class="avatar-wrapper" id="avatar-container" title="クリックでアバター動画を再取得">
+        <video id="avatar-video" class="avatar-video hidden" autoplay loop muted playsinline></video>
+        <div class="avatar-fallback" id="avatar-fallback">
+          <div class="avatar-ring"></div>
+          <span class="avatar-placeholder-text">Muse</span>
+          <button class="avatar-fetch-btn" id="btn-fetch-avatar" title="動画取得">取得</button>
+        </div>
+      </div>
+
+      <!-- 右側: 利用枠メーター -->
+      <div class="limit-box">
+        <div class="limit-header">
+          <span class="limit-title">利用枠 (Weekly)</span>
+          <span class="limit-percent" id="limit-percent-text">--%</span>
+        </div>
+        <div class="progress-bar-container">
+          <div class="progress-bar" id="limit-progress-bar" style="width: 0%;"></div>
+        </div>
+        <div class="limit-footer">
+          <span class="limit-reset-text" id="limit-reset-text">読み込み中...</span>
+          <button class="btn-micro" id="btn-refresh-limit" title="利用枠を再取得">更新</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- チャットスレッドエリア (R2) -->
+    <section class="chat-section">
+      <div class="chat-header">
+        <span class="chat-header-title">メインチャット</span>
+        <div class="chat-header-actions">
+          <span class="chat-sync-indicator" id="chat-sync-indicator"></span>
+          <select id="msg-limit-select" class="select-micro" title="表示件数">
+            <option value="3">3件</option>
+            <option value="5" selected>5件</option>
+            <option value="10">10件</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- メッセージリスト -->
+      <div class="chat-messages" id="chat-messages">
+        <div class="chat-placeholder">
+          <p class="placeholder-main">チャットを読み込んでいます...</p>
+          <p class="placeholder-sub">※ まだ表示されない場合はセッション画面でログインしてください</p>
+          <button class="btn-login-open" id="btn-open-session-empty">🖥️ セッション画面を開く</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- メッセージ入力・送信エリア (R3) -->
+    <footer class="chat-footer">
+      <div class="input-container">
+        <textarea
+          id="chat-input"
+          class="chat-textarea"
+          placeholder="Muse にメッセージを入力... (Enterで送信)"
+          rows="1"
+        ></textarea>
+        <button id="btn-send-message" class="btn-send" title="送信 (Enter)">
+          <span class="send-icon">➤</span>
+        </button>
+      </div>
+      <div class="footer-tips">
+        <span class="hotkey-tip">ホットキー: <kbd>Ctrl+Shift+M</kbd></span>
+        <span class="sync-status" id="footer-sync-time">未同期</span>
+      </div>
+    </footer>
+  </div>
+
+  <script src="main.js"></script>
+</body>
+</html>

@@ -1,0 +1,15 @@
+{
+  "name": "muse-desktop-mascot",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Windows Desktop Gadget for Muse AI",
+  "type": "module",
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "tauri": "tauri"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}
