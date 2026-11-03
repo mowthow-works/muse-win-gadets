@@ -44,6 +44,13 @@ const mascotBubbleText = document.getElementById('mascot-bubble-text');
 const mascotBubbleCursor = document.getElementById('mascot-bubble-cursor');
 const btnBubbleClose = document.getElementById('btn-bubble-close');
 
+// マスコットミニ入力バー要素 (Issue #27)
+const mascotInputBar = document.getElementById('mascot-input-bar');
+const mascotInputField = document.getElementById('mascot-input-field');
+const btnMascotInputSend = document.getElementById('btn-mascot-input-send');
+const btnMascotInputClose = document.getElementById('btn-mascot-input-close');
+const btnMascotQuickInput = document.getElementById('btn-mascot-quick-input');
+
 const limitPercentText = document.getElementById('limit-percent-text');
 const limitProgressBar = document.getElementById('limit-progress-bar');
 const limitResetText = document.getElementById('limit-reset-text');
@@ -82,24 +89,28 @@ function cleanMascotMessageText(text) {
     .replace(/^[ \t\u3000]+/gm, '');          // 各行頭の不自然なインデントを除去
 }
 
-function updateMascotBubbleDirection() {
+function applyMascotBubbleDirectionClass(onLeft) {
+  const heroCard = document.getElementById('hero-card');
+  if (!heroCard) return;
+  if (onLeft) {
+    heroCard.classList.add('bubble-on-left');
+    heroCard.classList.remove('bubble-on-right');
+  } else {
+    heroCard.classList.add('bubble-on-right');
+    heroCard.classList.remove('bubble-on-left');
+  }
+}
+
+async function updateMascotBubbleDirection() {
   if (!document.body.classList.contains('mode-mascot')) return;
   const heroCard = document.getElementById('hero-card');
   if (!heroCard) return;
 
-  // 画面の右半分（中心より右）にあるかどうか
-  const screenCenter = (window.screen.availLeft || 0) + ((window.screen.availWidth || 1920) / 2);
-  const winCenter = window.screenX + (window.outerWidth / 2);
-
-  if (winCenter > screenCenter) {
-    // 画面の右側にある -> 吹き出しは左側に出す！
-    heroCard.classList.add('bubble-on-left');
-    heroCard.classList.remove('bubble-on-right');
-  } else {
-    // 画面の左側にある -> 吹き出しは右側に出す！
-    heroCard.classList.add('bubble-on-right');
-    heroCard.classList.remove('bubble-on-left');
-  }
+  const currentOnLeft = !heroCard.classList.contains('bubble-on-right');
+  try {
+    const shouldBeOnLeft = await invoke('sync_mascot_bubble_direction', { currentOnLeft });
+    applyMascotBubbleDirectionClass(Boolean(shouldBeOnLeft));
+  } catch (_) {}
 }
 
 // ==========================================
@@ -154,7 +165,7 @@ function initTypingBuffers() {
       // わずかなクリックノイズ（指先とキートップの接触）
       const noise = (Math.random() * 2 - 1) * Math.exp(-t * 260) * cfg.noiseMix;
 
-      data[j] = (attack * 0.7 + bottom * 0.3 + noise) * (1 - t / duration);
+      data[j] = (attack * 0.8 + bottom * 0.45 + noise) * (1 - t / duration);
     }
     typingAudioBuffers.push(buffer);
   }
@@ -168,8 +179,8 @@ function playTypingSound() {
   if (!ctx || typingAudioBuffers.length === 0) return;
 
   const now = ctx.currentTime;
-  // 65ms 以内の連続再生はスロットル（秒間約15打鍵の心地よい「カタカタカタ…」リズムを維持）
-  if (now - lastTypingSoundTime < 0.065) return;
+  // 60ms 以内の連続再生はスロットル（秒間約16打鍵の心地よい「カタカタカタ…」リズムを維持）
+  if (now - lastTypingSoundTime < 0.060) return;
   lastTypingSoundTime = now;
 
   const volumeRatio = Math.max(0, Math.min(100, Number(pluginSettings.sound_volume) ?? 30)) / 100;
@@ -181,7 +192,7 @@ function playTypingSound() {
     source.buffer = buf;
 
     const gain = ctx.createGain();
-    gain.gain.value = volumeRatio * 0.45;
+    gain.gain.value = volumeRatio * 1.0;
 
     source.connect(gain);
     gain.connect(ctx.destination);
@@ -291,6 +302,7 @@ function startTypingLoop(text) {
 
 function playLupinTyping(text) {
   if (!mascotBubble || !mascotBubbleText) return;
+  closeMascotInput();
   const cleanedText = cleanMascotMessageText(text);
   if (!cleanedText) return;
 
@@ -351,6 +363,76 @@ function hideMascotBubble() {
   }
   if (mascotBubble) {
     mascotBubble.classList.add('hidden');
+  }
+}
+
+// ==========================================
+// マスコット クイック1行ミニ入力バー (Issue #27)
+// ==========================================
+function openMascotInput() {
+  if (!mascotInputBar || !mascotInputField) return;
+  getAudioContext();
+  hideMascotBubble();
+  updateMascotBubbleDirection();
+  mascotInputBar.classList.remove('hidden');
+  mascotInputField.value = '';
+  playTouchReactionSound();
+  setTimeout(() => {
+    mascotInputField.focus();
+  }, 60);
+}
+
+function closeMascotInput() {
+  if (mascotInputField) {
+    mascotInputField.blur();
+    mascotInputField.value = '';
+  }
+  if (!mascotInputBar) return;
+  mascotInputBar.classList.add('hidden');
+  try {
+    window.focus();
+  } catch (_) {}
+}
+
+function toggleMascotInput() {
+  if (!mascotInputBar) return;
+  if (mascotInputBar.classList.contains('hidden')) {
+    openMascotInput();
+  } else {
+    closeMascotInput();
+  }
+}
+
+async function sendMascotQuickMessage() {
+  if (!mascotInputField) return;
+  const text = mascotInputField.value.trim();
+  if (!text) return;
+
+  closeMascotInput();
+  recordInteraction();
+  setAvatarState('working');
+
+  // タイピング吹き出しで「考え中…」を表示
+  playLupinTyping('考え中…');
+
+  try {
+    await invoke('send_chat_message', { text });
+  } catch (err) {
+    console.error('sendMascotQuickMessage error:', err);
+    playLupinTyping('送信エラー: ' + err);
+    setAvatarState('idle');
+  } finally {
+    try {
+      window.focus();
+    } catch (_) {}
+    // 返答受信のため、段階的に再取得
+    setTimeout(loadChatMessages, 800);
+    setTimeout(loadChatMessages, 1800);
+    setTimeout(loadChatMessages, 3000);
+    setTimeout(loadChatMessages, 4500);
+    setTimeout(loadChatMessages, 6500);
+    setTimeout(loadChatMessages, 9000);
+    setTimeout(loadChatMessages, 12000);
   }
 }
 
@@ -988,26 +1070,24 @@ async function loadChatMessages() {
           // 初回起動時: 過去の最新メッセージを記録するのみ（初回起動でいきなり過去ログをタイピングしない）
           lastSeenAssistantText = latestAssistant;
         } else if (latestAssistant !== lastSeenAssistantText) {
-          // 新着、またはストリーミング途中のメッセージを受信
+          // 新着、またはストリーミング途中のメッセージを受信！
           pendingAssistantText = latestAssistant;
           recordInteraction();
+
+          // マスコットモード時は即座に吹き出しに最新返答テキストを表示（「考え中…」から最新回答へ即座に更新・シームレス追記）
+          if (document.body.classList.contains('mode-mascot')) {
+            playLupinTyping(latestAssistant);
+          }
 
           if (assistantCommitTimer) {
             clearTimeout(assistantCommitTimer);
             assistantCommitTimer = null;
           }
 
-          // Muse 本体の動作状態を判定（作業中・返信中なら吹き出しは出さず全文完了を待つ）
-          const isMuseBusy = (currentAvatarState === 'working' || currentAvatarState === 'making_something');
-
-          if (isMuseBusy) {
-            // 生成中は吹き出しを出さず待機（アバターは作業中動画を継続）
-          } else {
-            // テキストの増加・更新が止まって 2.5 秒経過したら「生成完了（全文確定）」とみなして一度だけ綺麗に表示
-            assistantCommitTimer = setTimeout(() => {
-              commitPendingAssistantMessage();
-            }, 2500);
-          }
+          // テキストの増加・更新が止まって 2.0 秒経過したら「生成完了」とみなして完了リアクションを実行
+          assistantCommitTimer = setTimeout(() => {
+            commitPendingAssistantMessage();
+          }, 2000);
         }
       }
     }
@@ -1152,14 +1232,18 @@ async function loadUsageLimit(forceRefresh = false) {
           avatarLimitBadgeEl.title = `利用可能枠: 残り ${pct}% (${limit.reset_text || ''})`;
         }
       } else {
-        limitPercentText.textContent = '--%';
-        limitProgressBar.style.width = '0%';
-        if (avatarContainer) {
-          avatarContainer.classList.remove('limit-safe', 'limit-warn', 'limit-danger');
-        }
-        if (avatarLimitBadgeEl) {
-          avatarLimitBadgeEl.textContent = '--%';
-          avatarLimitBadgeEl.className = 'avatar-limit-badge';
+        // すでに有効なパーセントが表示されている場合は '--%' で消さず維持
+        const curBadge = avatarLimitBadgeEl ? avatarLimitBadgeEl.textContent.trim() : '';
+        if (!curBadge || curBadge === '--%') {
+          limitPercentText.textContent = '--%';
+          limitProgressBar.style.width = '0%';
+          if (avatarContainer) {
+            avatarContainer.classList.remove('limit-safe', 'limit-warn', 'limit-danger');
+          }
+          if (avatarLimitBadgeEl) {
+            avatarLimitBadgeEl.textContent = '--%';
+            avatarLimitBadgeEl.className = 'avatar-limit-badge';
+          }
         }
       }
 
@@ -1244,13 +1328,14 @@ function applySizeMode(mode) {
   document.body.classList.remove('mode-small', 'mode-large', 'mode-mascot');
   if (mode === 'mascot') {
     document.body.classList.add('mode-mascot');
-    setTimeout(updateMascotBubbleDirection, 50);
   } else if (mode === 'large') {
     document.body.classList.add('mode-large');
     hideMascotBubble();
+    closeMascotInput();
   } else {
     document.body.classList.add('mode-small');
     hideMascotBubble();
+    closeMascotInput();
   }
 }
 
@@ -1258,7 +1343,6 @@ function applyMascotScale(scale) {
   document.body.classList.remove('scale-small', 'scale-standard', 'scale-large');
   const validScale = (scale === 'large' || scale === 'small') ? scale : 'standard';
   document.body.classList.add(`scale-${validScale}`);
-  setTimeout(updateMascotBubbleDirection, 50);
 }
 
 // ==========================================
@@ -1281,7 +1365,9 @@ window.addEventListener('DOMContentLoaded', async () => {
   if (avatarNameEl) {
     avatarNameEl.addEventListener('mousedown', (e) => {
       if (document.body.classList.contains('mode-mascot')) {
-        invoke('drag_window').catch(console.error);
+        invoke('drag_window').then(() => {
+          setTimeout(updateMascotBubbleDirection, 40);
+        }).catch(console.error);
       }
     });
   }
@@ -1303,7 +1389,11 @@ window.addEventListener('DOMContentLoaded', async () => {
     if (Math.hypot(dx, dy) > 6) {
       isDraggingAvatar = true;
       if (document.body.classList.contains('mode-mascot')) {
-        invoke('drag_window').catch(console.error);
+        invoke('drag_window').then(() => {
+          isPointerDownOnAvatar = false;
+          isDraggingAvatar = false;
+          setTimeout(updateMascotBubbleDirection, 40);
+        }).catch(console.error);
       }
     }
   });
@@ -1318,12 +1408,22 @@ window.addEventListener('DOMContentLoaded', async () => {
       // 6px 未満の移動で離した場合はクリックとして実行
       if (!wasDragging) {
         handleAvatarClickAction();
+      } else if (document.body.classList.contains('mode-mascot')) {
+        setTimeout(updateMascotBubbleDirection, 40);
       }
     }
+  });
 
-    if (document.body.classList.contains('mode-mascot')) {
-      updateMascotBubbleDirection();
-      invoke('save_current_window_position').catch(() => {});
+  // フォーカス喪失時・マウス離脱時にドラッグ状態を確実に完全リセット
+  window.addEventListener('blur', () => {
+    isPointerDownOnAvatar = false;
+    isDraggingAvatar = false;
+  });
+
+  // F12 キーで開発者ツールを開くショートカット
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'F12') {
+      invoke('open_mascot_devtools').catch(() => {});
     }
   });
 
@@ -1407,15 +1507,65 @@ window.addEventListener('DOMContentLoaded', async () => {
     }
   }
 
-  avatarContainer.addEventListener('contextmenu', (e) => {
+  // 全画面で標準のブラウザコンテキストメニュー（再読み込み等）を抑止
+  window.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+  });
+
+  // マスコットモード時の右クリック: クイック入力バーのトグル (Issue #27)
+  const handleMascotContextMenu = (e) => {
     recordInteraction();
     if (document.body.classList.contains('mode-mascot')) {
       e.preventDefault();
-      if (lastSeenAssistantText) {
-        playLupinTyping(lastSeenAssistantText);
-      }
+      e.stopPropagation();
+      toggleMascotInput();
     }
-  });
+  };
+  avatarContainer.addEventListener('contextmenu', handleMascotContextMenu);
+  if (mascotBubble) {
+    mascotBubble.addEventListener('contextmenu', handleMascotContextMenu);
+  }
+
+  // クイックミニ入力バー イベント登録 (Issue #27)
+  if (btnMascotQuickInput) {
+    btnMascotQuickInput.addEventListener('mousedown', (e) => {
+      e.stopPropagation();
+    });
+    btnMascotQuickInput.addEventListener('click', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      toggleMascotInput();
+    });
+  }
+  if (btnMascotInputSend) {
+    btnMascotInputSend.addEventListener('click', (e) => {
+      e.stopPropagation();
+      sendMascotQuickMessage();
+    });
+  }
+  if (btnMascotInputClose) {
+    btnMascotInputClose.addEventListener('click', (e) => {
+      e.stopPropagation();
+      closeMascotInput();
+    });
+  }
+  if (mascotInputField) {
+    // 日本語IME入力および通常文字入力で確実にカタカタ打鍵音を再生
+    mascotInputField.addEventListener('input', () => {
+      playTypingSound();
+    });
+    mascotInputField.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        sendMascotQuickMessage();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        closeMascotInput();
+      } else if (e.key === 'Backspace' || e.key === 'Delete' || (e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey)) {
+        playTypingSound();
+      }
+    });
+  }
   if (btnFetchAvatar) {
     btnFetchAvatar.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -1475,6 +1625,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   try {
     const config = await invoke('get_gadget_config');
     if (config) {
+      applyMascotBubbleDirectionClass(config.mascot_bubble_on_left !== false);
       applySizeMode(config.size_mode || 'small');
       applyMascotScale(config.mascot_scale || 'standard');
       if (config.message_limit) {
@@ -1506,10 +1657,28 @@ window.addEventListener('DOMContentLoaded', async () => {
   loadAvatar(false);
   loadUsageLimit(false);
 
-  // セッションWebViewのロード完了に合わせて段階的にチャットとヘルスチェックを同期
+  // ネームプレートクリックで利用枠を手動再取得＆最新化
+  if (avatarNameEl) {
+    avatarNameEl.addEventListener('click', (e) => {
+      e.stopPropagation();
+      loadUsageLimit(true);
+    });
+  }
+
+  // セッションWebViewのロード完了に合わせて段階的にチャット、ヘルスチェック、利用枠を同期
   setTimeout(() => syncAllSequential(false), 1800);
-  setTimeout(() => syncAllSequential(false), 4000);
-  setTimeout(() => syncAllSequential(false), 7000);
+  setTimeout(() => {
+    syncAllSequential(false);
+    loadUsageLimit(true);
+  }, 4500);
+  setTimeout(() => {
+    syncAllSequential(false);
+    loadUsageLimit(true);
+  }, 9000);
+  setTimeout(() => {
+    syncAllSequential(false);
+    loadUsageLimit(true);
+  }, 16000);
 
   // 3秒ごとのリアルタイム動作状態・チャット同期 ＆ 設定ホットリロード・放置監視
   setInterval(async () => {

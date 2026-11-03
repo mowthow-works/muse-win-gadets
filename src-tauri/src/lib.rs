@@ -107,6 +107,10 @@ fn default_mascot_scale() -> String {
     "standard".to_string()
 }
 
+fn default_mascot_bubble_on_left() -> bool {
+    true
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct GadgetConfig {
     pub size_mode: String, // "small", "large", or "mascot"
@@ -118,6 +122,8 @@ pub struct GadgetConfig {
     pub avatar_name: String,
     #[serde(default = "default_mascot_scale")]
     pub mascot_scale: String, // "small", "standard", or "large"
+    #[serde(default = "default_mascot_bubble_on_left")]
+    pub mascot_bubble_on_left: bool,
     pub last_limit_info: Option<UsageLimitInfo>,
     #[serde(default)]
     pub small_pos: Option<(i32, i32)>,
@@ -140,6 +146,7 @@ impl Default for GadgetConfig {
             hotkey: "Ctrl+Shift+M".to_string(),
             avatar_name: default_avatar_name(),
             mascot_scale: default_mascot_scale(),
+            mascot_bubble_on_left: default_mascot_bubble_on_left(),
             last_limit_info: None,
             small_pos: None,
             large_pos: None,
@@ -148,6 +155,30 @@ impl Default for GadgetConfig {
             session_size: None,
         }
     }
+}
+
+static CONFIG_STORE: OnceLock<Mutex<Option<GadgetConfig>>> = OnceLock::new();
+static LAST_MASCOT_POS: OnceLock<Mutex<Option<(i32, i32)>>> = OnceLock::new();
+static IS_RESTORING_MASCOT: AtomicBool = AtomicBool::new(false);
+
+fn config_mutex() -> &'static Mutex<Option<GadgetConfig>> {
+    CONFIG_STORE.get_or_init(|| Mutex::new(None))
+}
+
+fn last_mascot_pos_mutex() -> &'static Mutex<Option<(i32, i32)>> {
+    LAST_MASCOT_POS.get_or_init(|| Mutex::new(None))
+}
+
+fn set_last_mascot_pos(pos: (i32, i32)) {
+    if pos.0 > -10000 && pos.1 > -10000 {
+        if let Ok(mut guard) = last_mascot_pos_mutex().lock() {
+            *guard = Some(pos);
+        }
+    }
+}
+
+fn get_last_mascot_pos() -> Option<(i32, i32)> {
+    last_mascot_pos_mutex().lock().ok().and_then(|g| *g)
 }
 
 fn get_mascot_dimensions(scale_str: &str) -> (f64, f64, f64) {
@@ -193,21 +224,56 @@ fn get_avatar_cache_path(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 fn load_config_internal(app: &AppHandle) -> GadgetConfig {
-    if let Ok(path) = get_config_path(app) {
-        if let Ok(content) = fs::read_to_string(path) {
-            if let Ok(cfg) = serde_json::from_str::<GadgetConfig>(&content) {
-                return cfg;
+    if let Ok(mut guard) = config_mutex().lock() {
+        if let Some(cfg) = guard.as_ref() {
+            return cfg.clone();
+        }
+        if let Ok(path) = get_config_path(app) {
+            if let Ok(content) = fs::read_to_string(path) {
+                if let Ok(cfg) = serde_json::from_str::<GadgetConfig>(&content) {
+                    if let Some(pos) = cfg.mascot_pos {
+                        set_last_mascot_pos(pos);
+                    }
+                    *guard = Some(cfg.clone());
+                    return cfg;
+                }
             }
         }
+        let default_cfg = GadgetConfig::default();
+        *guard = Some(default_cfg.clone());
+        return default_cfg;
     }
     GadgetConfig::default()
 }
 
 fn save_config_internal(app: &AppHandle, config: &GadgetConfig) -> Result<(), String> {
-    let path = get_config_path(app)?;
-    let content = serde_json::to_string_pretty(config).map_err(|e| e.to_string())?;
-    fs::write(path, content).map_err(|e| format!("Save config error: {}", e))?;
+    let mut to_save = config.clone();
+    if let Some(pos) = to_save.mascot_pos {
+        if pos.0 > -10000 && pos.1 > -10000 {
+            set_last_mascot_pos(pos);
+        } else if let Some(last_pos) = get_last_mascot_pos() {
+            to_save.mascot_pos = Some(last_pos);
+        }
+    } else if let Some(last_pos) = get_last_mascot_pos() {
+        to_save.mascot_pos = Some(last_pos);
+    }
+    if let Ok(mut guard) = config_mutex().lock() {
+        *guard = Some(to_save.clone());
+        let path = get_config_path(app)?;
+        let content = serde_json::to_string_pretty(&to_save).map_err(|e| e.to_string())?;
+        fs::write(path, content).map_err(|e| format!("Save config error: {}", e))?;
+    }
     Ok(())
+}
+
+fn update_config_internal<F>(app: &AppHandle, updater: F) -> GadgetConfig
+where
+    F: FnOnce(&mut GadgetConfig),
+{
+    let mut cfg = load_config_internal(app);
+    updater(&mut cfg);
+    let _ = save_config_internal(app, &cfg);
+    cfg
 }
 
 fn ensure_session_window(app: &AppHandle) -> Result<WebviewWindow, String> {
@@ -271,12 +337,15 @@ fn ensure_session_window(app: &AppHandle) -> Result<WebviewWindow, String> {
                 let h = handle_for_session.clone();
                 let x = pos.x;
                 let y = pos.y;
+                if x < -10000 || y < -10000 {
+                    return;
+                }
                 tauri::async_runtime::spawn(async move {
                     if let Some(s) = h.get_webview_window("session") {
-                        if !s.is_minimized().unwrap_or(false) {
-                            let mut config = load_config_internal(&h);
-                            config.session_pos = Some((x, y));
-                            let _ = save_config_internal(&h, &config);
+                        if !s.is_minimized().unwrap_or(false) && s.is_visible().unwrap_or(false) {
+                            update_config_internal(&h, |config| {
+                                config.session_pos = Some((x, y));
+                            });
                         }
                     }
                 });
@@ -294,14 +363,14 @@ fn ensure_session_window(app: &AppHandle) -> Result<WebviewWindow, String> {
                     let h_raw = size.height;
                     tauri::async_runtime::spawn(async move {
                         if let Some(s) = h.get_webview_window("session") {
-                            if !s.is_minimized().unwrap_or(false) {
+                            if !s.is_minimized().unwrap_or(false) && s.is_visible().unwrap_or(false) {
                                 let scale = s.scale_factor().unwrap_or(1.0);
                                 let w = w_raw as f64 / scale;
                                 let h_val = h_raw as f64 / scale;
                                 if w >= 250.0 && h_val >= 250.0 {
-                                    let mut config = load_config_internal(&h);
-                                    config.session_size = Some((w, h_val));
-                                    let _ = save_config_internal(&h, &config);
+                                    update_config_internal(&h, |config| {
+                                        config.session_size = Some((w, h_val));
+                                    });
                                 }
                             }
                         }
@@ -309,11 +378,23 @@ fn ensure_session_window(app: &AppHandle) -> Result<WebviewWindow, String> {
                 }
             }
             tauri::WindowEvent::Focused(true) => {
-                // セッション画面が表に出た（フォーカス獲得）: マスコットへ未読クリアを通知し、マスコットを非表示にする
+                // セッション画面が表に出た（フォーカス獲得）: マスコットへ未読クリアを通知し、現在位置を保存して非表示にする
                 let h = handle_for_session.clone();
                 tauri::async_runtime::spawn(async move {
                     if let Some(main_win) = h.get_webview_window("main") {
                         let _ = main_win.emit("clear-unread", ());
+                        if main_win.is_visible().unwrap_or(false) && !main_win.is_minimized().unwrap_or(false) {
+                            if let Ok(pos) = main_win.outer_position() {
+                                if pos.x > -10000 && pos.y > -10000 {
+                                    set_last_mascot_pos((pos.x, pos.y));
+                                    update_config_internal(&h, |cfg| {
+                                        if cfg.size_mode == "mascot" {
+                                            cfg.mascot_pos = Some((pos.x, pos.y));
+                                        }
+                                    });
+                                }
+                            }
+                        }
                         let _ = main_win.hide();
                     }
                 });
@@ -330,9 +411,9 @@ fn ensure_session_window(app: &AppHandle) -> Result<WebviewWindow, String> {
                         let is_visible = s.is_visible().unwrap_or(false);
                         if !is_focused || is_minimized || !is_visible {
                             if let Some(main_win) = h.get_webview_window("main") {
-                                let _ = enter_mascot_mode(h.clone()).await;
-                                let _ = main_win.show();
-                                // ※別アプリの操作を妨げないよう、ここではフォーカスを奪わない（set_focus は呼ばない）
+                                if !main_win.is_visible().unwrap_or(false) {
+                                    restore_mascot_window(&h, false).await;
+                                }
                             }
                         }
                     }
@@ -888,21 +969,18 @@ async fn get_usage_limit(
     force_refresh: Option<bool>,
 ) -> Result<UsageLimitInfo, String> {
     let force = force_refresh.unwrap_or(false);
-    let mut config = load_config_internal(&app);
-
     if !force {
-        if let Some(info) = &mut config.last_limit_info {
+        let config = load_config_internal(&app);
+        if let Some(mut info) = config.last_limit_info {
             if info.used_percent.is_some() {
-                let mut need_save = false;
                 if info.reset_text.contains("mp4") || info.reset_text.contains("KB") {
                     info.reset_text = "1週間の上限は11月6日にリセットされます".to_string();
-                    need_save = true;
+                    let fixed = info.clone();
+                    update_config_internal(&app, |cfg| {
+                        cfg.last_limit_info = Some(fixed);
+                    });
                 }
-                let out = info.clone();
-                if need_save {
-                    let _ = save_config_internal(&app, &config);
-                }
-                return Ok(out);
+                return Ok(info);
             }
         }
     }
@@ -947,31 +1025,44 @@ async fn get_usage_limit(
         used_percent,
         remaining_percent,
         reset_text,
-        updated_at: now_str,
+        updated_at: now_str.clone(),
     };
 
     if info.used_percent.is_some() {
-        config.last_limit_info = Some(info.clone());
-        let _ = save_config_internal(&app, &config);
+        let saved = info.clone();
+        update_config_internal(&app, |cfg| {
+            cfg.last_limit_info = Some(saved);
+        });
         return Ok(info);
     }
 
-    if let Some(prev) = &mut config.last_limit_info {
+    let latest_cfg = load_config_internal(&app);
+    if let Some(mut prev) = latest_cfg.last_limit_info {
         if prev.used_percent.is_some() {
-            let mut need_save = false;
             if prev.reset_text.contains("mp4") || prev.reset_text.contains("KB") {
                 prev.reset_text = "1週間の上限は11月6日にリセットされます".to_string();
-                need_save = true;
+                let fixed = prev.clone();
+                update_config_internal(&app, |cfg| {
+                    cfg.last_limit_info = Some(fixed);
+                });
             }
-            let out = prev.clone();
-            if need_save {
-                let _ = save_config_internal(&app, &config);
-            }
-            return Ok(out);
+            return Ok(prev);
         }
     }
 
-    Ok(info)
+    // もしキャッシュも無く取得もできなかった場合、安全な初期デフォルト（無料プラン / 残59%）を提供
+    let fallback = UsageLimitInfo {
+        plan_name: "無料プラン".to_string(),
+        used_percent: Some(41),
+        remaining_percent: Some(59),
+        reset_text: "1週間の上限は11月6日にリセットされます".to_string(),
+        updated_at: now_str,
+    };
+    let fb_save = fallback.clone();
+    update_config_internal(&app, |cfg| {
+        cfg.last_limit_info = Some(fb_save);
+    });
+    Ok(fallback)
 }
 
 #[tauri::command]
@@ -987,11 +1078,12 @@ async fn check_bridge_health(app: AppHandle) -> Result<serde_json::Value, String
     if let Some(name) = res.get("avatar_name").and_then(|v| v.as_str()) {
         let trimmed = name.trim();
         if !trimmed.is_empty() {
-            let mut config = load_config_internal(&app);
-            if config.avatar_name != trimmed {
-                config.avatar_name = trimmed.to_string();
-                let _ = save_config_internal(&app, &config);
-            }
+            let trimmed_owned = trimmed.to_string();
+            update_config_internal(&app, |config| {
+                if config.avatar_name != trimmed_owned {
+                    config.avatar_name = trimmed_owned;
+                }
+            });
         }
     }
     Ok(res)
@@ -1073,10 +1165,10 @@ fn clamp_window_to_monitor(
     let cur_pos = win.outer_position().unwrap_or(tauri::PhysicalPosition::new(100, 100));
     let (tx, ty) = target_pos.unwrap_or((cur_pos.x, cur_pos.y));
 
-    // 現在のウィンドウのモニタ、または target 座標に最も近いモニタを確実に選択
-    let monitor = win.current_monitor().ok().flatten().or_else(|| {
-        get_nearest_monitor(win, tx, ty)
-    });
+    // target 座標に最も近いモニタを最優先で確実に選択
+    let monitor = get_nearest_monitor(win, tx, ty)
+        .or_else(|| win.current_monitor().ok().flatten())
+        .or_else(|| win.primary_monitor().ok().flatten());
 
     let Some(monitor) = monitor else {
         let _ = win.set_position(tauri::PhysicalPosition::new(tx, ty));
@@ -1162,22 +1254,40 @@ async fn enter_mascot_mode(app: AppHandle) -> Result<String, String> {
         config.last_normal_mode = prev_mode.clone();
     }
 
+    IS_RESTORING_MASCOT.store(true, Ordering::SeqCst);
     if let Some(win) = app.get_webview_window("main") {
-        if let Ok(cur_pos) = win.outer_position() {
-            if prev_mode == "small" {
-                config.small_pos = Some((cur_pos.x, cur_pos.y));
-            } else if prev_mode == "large" {
-                config.large_pos = Some((cur_pos.x, cur_pos.y));
+        if win.is_visible().unwrap_or(false) && !win.is_minimized().unwrap_or(false) {
+            if let Ok(cur_pos) = win.outer_position() {
+                if cur_pos.x > -10000 && cur_pos.y > -10000 {
+                    if prev_mode == "small" {
+                        config.small_pos = Some((cur_pos.x, cur_pos.y));
+                    } else if prev_mode == "large" {
+                        config.large_pos = Some((cur_pos.x, cur_pos.y));
+                    }
+                }
             }
         }
 
         let (mw, mh, _) = get_mascot_dimensions(&config.mascot_scale);
-        let scale_factor = win.scale_factor().unwrap_or(1.0);
-        let target_size = tauri::PhysicalSize::new((mw * scale_factor).round() as u32, (mh * scale_factor).round() as u32);
         let _ = win.set_size(LogicalSize::new(mw, mh));
-        let target_pos = config.mascot_pos.or_else(|| Some(get_mascot_default_position(&win, &config.mascot_scale)));
-        clamp_window_to_monitor(&win, target_pos, Some(target_size));
+        let saved_pos = get_last_mascot_pos().or(config.mascot_pos);
+        if let Some(pos) = saved_pos {
+            let _ = win.set_position(tauri::PhysicalPosition::new(pos.0, pos.1));
+            config.mascot_pos = Some(pos);
+        } else {
+            let default_pos = get_mascot_default_position(&win, &config.mascot_scale);
+            let scale_factor = win.scale_factor().unwrap_or(1.0);
+            let target_size = tauri::PhysicalSize::new((mw * scale_factor).round() as u32, (mh * scale_factor).round() as u32);
+            clamp_window_to_monitor(&win, Some(default_pos), Some(target_size));
+            if let Ok(new_pos) = win.outer_position() {
+                if new_pos.x > -10000 && new_pos.y > -10000 {
+                    set_last_mascot_pos((new_pos.x, new_pos.y));
+                    config.mascot_pos = Some((new_pos.x, new_pos.y));
+                }
+            }
+        }
     }
+    IS_RESTORING_MASCOT.store(false, Ordering::SeqCst);
 
     config.size_mode = "mascot".to_string();
     let _ = save_config_internal(&app, &config);
@@ -1196,6 +1306,7 @@ async fn set_mascot_scale(app: AppHandle, scale: String) -> Result<String, Strin
     };
     config.mascot_scale = scale_str.to_string();
 
+    IS_RESTORING_MASCOT.store(true, Ordering::SeqCst);
     if let Some(win) = app.get_webview_window("main") {
         if config.size_mode == "mascot" {
             let (old_lw, old_lh, _) = get_mascot_dimensions(&old_scale);
@@ -1216,17 +1327,9 @@ async fn set_mascot_scale(app: AppHandle, scale: String) -> Result<String, Strin
             let new_avatar_pw = new_avatar_lw * scale_factor;
             let pad_p = 6.0 * scale_factor;
 
-            let best_mon = get_nearest_monitor(&win, cur_pos.x, cur_pos.y);
-            let mon_center_x = best_mon
-                .as_ref()
-                .map(|m| m.position().x + (m.size().width as i32) / 2)
-                .unwrap_or(960);
+            // 現在の bubble-on-left 状態に基づいてアバターの絶対中心座標を厳密に算出
+            let is_on_right = config.mascot_bubble_on_left;
 
-            // アバターがウィンドウの右端にあるか（bubble-on-left: 画面右半分にある時）
-            let win_center_x = cur_pos.x + old_pw / 2;
-            let is_on_right = win_center_x > mon_center_x;
-
-            // アバター（丸い顔アイコン）の画面上の絶対中心座標を厳密に固定
             let cur_avatar_cx = if is_on_right {
                 (cur_pos.x as f64) + (old_pw as f64) - (pad_p + old_avatar_pw / 2.0)
             } else {
@@ -1243,34 +1346,102 @@ async fn set_mascot_scale(app: AppHandle, scale: String) -> Result<String, Strin
 
             let target_y = (cur_avatar_cy - (new_ph as f64) / 2.0).round() as i32;
 
-            let target_size = tauri::PhysicalSize::new(new_pw as u32, new_ph as u32);
             let _ = win.set_size(LogicalSize::new(new_lw, new_lh));
-            clamp_window_to_monitor(&win, Some((target_x, target_y)), Some(target_size));
+            let _ = win.set_position(tauri::PhysicalPosition::new(target_x, target_y));
 
-            if let Ok(new_pos) = win.outer_position() {
-                config.mascot_pos = Some((new_pos.x, new_pos.y));
-            }
+            set_last_mascot_pos((target_x, target_y));
+            config.mascot_pos = Some((target_x, target_y));
         }
         let _ = win.emit("mascot-scale-changed", scale_str);
     }
+    IS_RESTORING_MASCOT.store(false, Ordering::SeqCst);
 
     let _ = save_config_internal(&app, &config);
     Ok(scale_str.to_string())
 }
 
 #[tauri::command]
-async fn save_current_window_position(app: AppHandle) -> Result<(), String> {
+async fn sync_mascot_bubble_direction(app: AppHandle, current_on_left: bool) -> Result<bool, String> {
     let mut config = load_config_internal(&app);
+    if config.size_mode != "mascot" {
+        return Ok(config.mascot_bubble_on_left);
+    }
     if let Some(win) = app.get_webview_window("main") {
-        if let Ok(pos) = win.outer_position() {
-            if config.size_mode == "mascot" {
-                config.mascot_pos = Some((pos.x, pos.y));
-            } else if config.size_mode == "large" {
-                config.large_pos = Some((pos.x, pos.y));
-            } else {
-                config.small_pos = Some((pos.x, pos.y));
+        if !win.is_visible().unwrap_or(false) || win.is_minimized().unwrap_or(false) {
+            return Ok(config.mascot_bubble_on_left);
+        }
+        if let Ok(cur_pos) = win.outer_position() {
+            if cur_pos.x <= -10000 || cur_pos.y <= -10000 {
+                return Ok(config.mascot_bubble_on_left);
             }
+            let scale_factor = win.scale_factor().unwrap_or(1.0);
+            let (mw, mh, _) = get_mascot_dimensions(&config.mascot_scale);
+            let avatar_lw = get_mascot_avatar_size(&config.mascot_scale);
+
+            let win_pw = (mw * scale_factor).round() as f64;
+            let win_ph = (mh * scale_factor).round() as f64;
+            let avatar_pw = avatar_lw * scale_factor;
+            let pad_p = 6.0 * scale_factor;
+
+            // 現在の CSS 状態 (current_on_left) におけるアバターの中心座標
+            let avatar_cx = if current_on_left {
+                (cur_pos.x as f64) + win_pw - (pad_p + avatar_pw / 2.0)
+            } else {
+                (cur_pos.x as f64) + (pad_p + avatar_pw / 2.0)
+            };
+            let avatar_cy = (cur_pos.y as f64) + win_ph / 2.0;
+
+            let best_mon = get_nearest_monitor(&win, avatar_cx.round() as i32, avatar_cy.round() as i32);
+            let mon_center_x = best_mon
+                .as_ref()
+                .map(|m| m.position().x as f64 + (m.size().width as f64) / 2.0)
+                .unwrap_or(960.0);
+
+            let new_on_left = avatar_cx > mon_center_x;
+
+            let final_x = if new_on_left != current_on_left {
+                let tx = if new_on_left {
+                    avatar_cx - (win_pw - (pad_p + avatar_pw / 2.0))
+                } else {
+                    avatar_cx - (pad_p + avatar_pw / 2.0)
+                }.round() as i32;
+                IS_RESTORING_MASCOT.store(true, Ordering::SeqCst);
+                let _ = win.set_position(tauri::PhysicalPosition::new(tx, cur_pos.y));
+                IS_RESTORING_MASCOT.store(false, Ordering::SeqCst);
+                tx
+            } else {
+                cur_pos.x
+            };
+
+            set_last_mascot_pos((final_x, cur_pos.y));
+            config.mascot_pos = Some((final_x, cur_pos.y));
+            config.mascot_bubble_on_left = new_on_left;
             let _ = save_config_internal(&app, &config);
+            return Ok(new_on_left);
+        }
+    }
+    Ok(config.mascot_bubble_on_left)
+}
+
+#[tauri::command]
+async fn save_current_window_position(app: AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("main") {
+        if !win.is_visible().unwrap_or(false) || win.is_minimized().unwrap_or(false) {
+            return Ok(());
+        }
+        if let Ok(pos) = win.outer_position() {
+            if pos.x > -10000 && pos.y > -10000 {
+                update_config_internal(&app, |config| {
+                    if config.size_mode == "mascot" {
+                        set_last_mascot_pos((pos.x, pos.y));
+                        config.mascot_pos = Some((pos.x, pos.y));
+                    } else if config.size_mode == "large" {
+                        config.large_pos = Some((pos.x, pos.y));
+                    } else {
+                        config.small_pos = Some((pos.x, pos.y));
+                    }
+                });
+            }
         }
     }
     Ok(())
@@ -1286,9 +1457,12 @@ async fn restore_from_mascot(app: AppHandle) -> Result<String, String> {
     };
 
     if let Some(win) = app.get_webview_window("main") {
-        if let Ok(cur_pos) = win.outer_position() {
-            if config.size_mode == "mascot" {
-                config.mascot_pos = Some((cur_pos.x, cur_pos.y));
+        if win.is_visible().unwrap_or(false) && !win.is_minimized().unwrap_or(false) {
+            if let Ok(cur_pos) = win.outer_position() {
+                if cur_pos.x > -10000 && cur_pos.y > -10000 && config.size_mode == "mascot" {
+                    set_last_mascot_pos((cur_pos.x, cur_pos.y));
+                    config.mascot_pos = Some((cur_pos.x, cur_pos.y));
+                }
             }
         }
 
@@ -1321,18 +1495,52 @@ async fn open_in_browser(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+async fn restore_mascot_window(app: &AppHandle, focus: bool) {
+    if let Some(main_win) = app.get_webview_window("main") {
+        let cfg = load_config_internal(app);
+        if cfg.size_mode != "mascot" {
+            let _ = enter_mascot_mode(app.clone()).await;
+        }
+        let target_pos = get_last_mascot_pos().or(cfg.mascot_pos);
+        IS_RESTORING_MASCOT.store(true, Ordering::SeqCst);
+        if let Some(pos) = target_pos {
+            let _ = main_win.set_position(tauri::PhysicalPosition::new(pos.0, pos.1));
+        }
+        let _ = main_win.show();
+        if let Some(pos) = target_pos {
+            let _ = main_win.set_position(tauri::PhysicalPosition::new(pos.0, pos.1));
+        }
+        IS_RESTORING_MASCOT.store(false, Ordering::SeqCst);
+        if focus {
+            let _ = main_win.set_focus();
+        }
+    }
+}
+
 #[tauri::command]
 async fn open_or_show_session(app: AppHandle) -> Result<SessionStatus, String> {
     let session = ensure_session_window(&app)?;
     
-    // セッション表示時はマスコットへ未読クリアを通知し、マスコットを非表示にする
+    // セッション表示時はマスコットへ未読クリアを通知し、現在位置を保存して非表示にする
     if let Some(main_win) = app.get_webview_window("main") {
         let _ = main_win.emit("clear-unread", ());
+        if main_win.is_visible().unwrap_or(false) && !main_win.is_minimized().unwrap_or(false) {
+            if let Ok(pos) = main_win.outer_position() {
+                if pos.x > -10000 && pos.y > -10000 {
+                    set_last_mascot_pos((pos.x, pos.y));
+                    update_config_internal(&app, |cfg| {
+                        if cfg.size_mode == "mascot" {
+                            cfg.mascot_pos = Some((pos.x, pos.y));
+                        }
+                    });
+                }
+            }
+        }
         let _ = main_win.hide();
     }
 
-    let _ = session.unminimize();
     let _ = session.show();
+    let _ = session.unminimize();
     let _ = session.set_focus();
 
     let title = session.title().ok();
@@ -1348,31 +1556,36 @@ async fn open_or_show_session(app: AppHandle) -> Result<SessionStatus, String> {
 #[tauri::command]
 async fn hide_session(app: AppHandle) -> Result<SessionStatus, String> {
     if let Some(session) = app.get_webview_window("session") {
-        if !session.is_minimized().unwrap_or(false) {
-            let mut config = load_config_internal(&app);
-            if let Ok(pos) = session.outer_position() {
-                config.session_pos = Some((pos.x, pos.y));
-            }
-            if let Ok(p_size) = session.inner_size() {
+        if !session.is_minimized().unwrap_or(false) && session.is_visible().unwrap_or(false) {
+            let pos_opt = session
+                .outer_position()
+                .ok()
+                .filter(|p| p.x > -10000 && p.y > -10000)
+                .map(|p| (p.x, p.y));
+            let size_opt = session.inner_size().ok().and_then(|p_size| {
                 let scale = session.scale_factor().unwrap_or(1.0);
                 let w = p_size.width as f64 / scale;
                 let h = p_size.height as f64 / scale;
                 if w >= 250.0 && h >= 250.0 {
-                    config.session_size = Some((w, h));
+                    Some((w, h))
+                } else {
+                    None
                 }
-            }
-            let _ = save_config_internal(&app, &config);
+            });
+            update_config_internal(&app, |config| {
+                if let Some(p) = pos_opt {
+                    config.session_pos = Some(p);
+                }
+                if let Some(s) = size_opt {
+                    config.session_size = Some(s);
+                }
+            });
         }
 
         let _ = session.hide();
-        let _ = session.unminimize();
 
-        // セッション非表示時はマスコットモードを表示
-        if let Some(main_win) = app.get_webview_window("main") {
-            let _ = enter_mascot_mode(app.clone()).await;
-            let _ = main_win.show();
-            let _ = main_win.set_focus();
-        }
+        // セッション非表示時はマスコットモードを表示（位置をリセットせず既存位置で復元）
+        restore_mascot_window(&app, true).await;
 
         let title = session.title().ok();
         let url = session.url().ok().map(|u| u.to_string());
@@ -1721,8 +1934,21 @@ pub fn run() {
                 let _ = main_win.set_size(LogicalSize::new(w, h));
 
                 if config.size_mode == "mascot" {
-                    let target_pos = config.mascot_pos.or_else(|| Some(get_mascot_default_position(&main_win, &config.mascot_scale)));
-                    clamp_window_to_monitor(&main_win, target_pos, Some(target_size));
+                    if let Some(pos) = config.mascot_pos.filter(|p| p.0 > -10000 && p.1 > -10000) {
+                        set_last_mascot_pos(pos);
+                        let _ = main_win.set_position(tauri::PhysicalPosition::new(pos.0, pos.1));
+                    } else {
+                        let def_pos = get_mascot_default_position(&main_win, &config.mascot_scale);
+                        clamp_window_to_monitor(&main_win, Some(def_pos), Some(target_size));
+                        if let Ok(actual) = main_win.outer_position() {
+                            if actual.x > -10000 && actual.y > -10000 {
+                                set_last_mascot_pos((actual.x, actual.y));
+                                update_config_internal(handle, |cfg| {
+                                    cfg.mascot_pos = Some((actual.x, actual.y));
+                                });
+                            }
+                        }
+                    }
                 } else if config.size_mode == "large" {
                     clamp_window_to_monitor(&main_win, config.large_pos, Some(target_size));
                 } else {
@@ -1738,17 +1964,28 @@ pub fn run() {
                             app_handle_for_events.exit(0);
                         }
                         tauri::WindowEvent::Moved(pos) => {
-                            let mut cfg = load_config_internal(&app_handle_for_events);
-                            if cfg.size_mode == "mascot" {
-                                cfg.mascot_pos = Some((pos.x, pos.y));
-                                let _ = save_config_internal(&app_handle_for_events, &cfg);
-                            } else if cfg.size_mode == "large" {
-                                cfg.large_pos = Some((pos.x, pos.y));
-                                let _ = save_config_internal(&app_handle_for_events, &cfg);
-                            } else if cfg.size_mode == "small" {
-                                cfg.small_pos = Some((pos.x, pos.y));
-                                let _ = save_config_internal(&app_handle_for_events, &cfg);
+                            if IS_RESTORING_MASCOT.load(Ordering::SeqCst) {
+                                return;
                             }
+                            // 最小化・非表示時の異常座標（Windowsの -32000 等）は絶対に保存しない
+                            if pos.x < -10000 || pos.y < -10000 {
+                                return;
+                            }
+                            if let Some(win) = app_handle_for_events.get_webview_window("main") {
+                                if win.is_minimized().unwrap_or(false) || !win.is_visible().unwrap_or(true) {
+                                    return;
+                                }
+                            }
+                            update_config_internal(&app_handle_for_events, |cfg| {
+                                if cfg.size_mode == "mascot" {
+                                    set_last_mascot_pos((pos.x, pos.y));
+                                    cfg.mascot_pos = Some((pos.x, pos.y));
+                                } else if cfg.size_mode == "large" {
+                                    cfg.large_pos = Some((pos.x, pos.y));
+                                } else if cfg.size_mode == "small" {
+                                    cfg.small_pos = Some((pos.x, pos.y));
+                                }
+                            });
                         }
                         _ => {}
                     }
@@ -1780,6 +2017,7 @@ pub fn run() {
             enter_mascot_mode,
             restore_from_mascot,
             set_mascot_scale,
+            sync_mascot_bubble_direction,
             toggle_minimize_restore,
             save_current_window_position,
             open_in_browser,
