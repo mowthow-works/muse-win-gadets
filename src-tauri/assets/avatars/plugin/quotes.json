@@ -19,8 +19,8 @@
       "min_idle_sec": 0,
       "max_idle_sec": null,
       "time_ranges": ["00:00-23:59"],
-      "duration_sec": 30,
-      "weight": 1,
+      "duration_sec": 20,
+      "weight": 2,
       "quote_probability": 1.0,
       "quotes": [
         "もぐもぐ…たい焼き、甘くておいしい〜！",
@@ -33,7 +33,7 @@
       "min_idle_sec": 0,
       "max_idle_sec": null,
       "time_ranges": ["00:00-23:59"],
-      "duration_sec": 30,
+      "duration_sec": 20,
       "weight": 1,
       "quote_probability": 1.0,
       "quotes": [
@@ -47,7 +47,7 @@
       "min_idle_sec": 0,
       "max_idle_sec": null,
       "time_ranges": ["00:00-23:59"],
-      "duration_sec": 30,
+      "duration_sec": 40,
       "weight": 1,
       "quote_probability": 1.0,
       "quotes": [
@@ -61,8 +61,8 @@
       "min_idle_sec": 0,
       "max_idle_sec": null,
       "time_ranges": ["00:00-23:59"],
-      "duration_sec": 30,
-      "weight": 1,
+      "duration_sec": 20,
+      "weight": 3,
       "quote_probability": 1.0,
       "quotes": [
         "スマホでちょっとトレンドチェック中〜",
@@ -76,7 +76,7 @@
       "max_idle_sec": null,
       "time_ranges": ["00:00-23:59"],
       "duration_sec": 30,
-      "weight": 1,
+      "weight": 3,
       "quote_probability": 1.0,
       "quotes": [
         "ふぁ〜、背伸び！リフレッシュ完了！",
@@ -90,7 +90,7 @@
       "max_idle_sec": null,
       "time_ranges": ["00:00-23:59"],
       "duration_sec": 30,
-      "weight": 1,
+      "weight": 4,
       "quote_probability": 1.0,
       "quotes": [
         "カタカタ…次のタスクの予習をしておくね！",
