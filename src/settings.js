@@ -87,10 +87,26 @@ const inputDefaultDuration = document.getElementById('input-default-duration');
 const inputBubbleDuration = document.getElementById('input-bubble-duration');
 const inputTouchDuration = document.getElementById('input-touch-duration');
 
+const toggleSoundEnabled = document.getElementById('toggle-sound-enabled');
+const inputSoundVolume = document.getElementById('input-sound-volume');
+const soundVolumeDisplay = document.getElementById('sound-volume-display');
+const btnTestSound = document.getElementById('btn-test-sound');
+
+const scaleRadios = document.querySelectorAll('input[name="mascot-scale"]');
+
 const touchQuotesListEl = document.getElementById('touch-quotes-list');
 const btnAddTouchQuote = document.getElementById('btn-add-touch-quote');
 const idleQuotesListEl = document.getElementById('idle-quotes-list');
 const btnAddIdleQuote = document.getElementById('btn-add-idle-quote');
+
+const morningQuotesListEl = document.getElementById('morning-quotes-list');
+const btnAddMorningQuote = document.getElementById('btn-add-morning-quote');
+const afternoonQuotesListEl = document.getElementById('afternoon-quotes-list');
+const btnAddAfternoonQuote = document.getElementById('btn-add-afternoon-quote');
+const eveningQuotesListEl = document.getElementById('evening-quotes-list');
+const btnAddEveningQuote = document.getElementById('btn-add-evening-quote');
+const nightQuotesListEl = document.getElementById('night-quotes-list');
+const btnAddNightQuote = document.getElementById('btn-add-night-quote');
 
 const videoSettingsList = document.getElementById('video-settings-list');
 const btnAddVideo = document.getElementById('btn-add-video');
@@ -254,6 +270,12 @@ function renderVideoList() {
 function renderAllQuotes() {
   renderSimpleQuotesList(touchQuotesListEl, currentQuotes.touch_reactions, 'リアクションセリフが登録されていません。');
   renderSimpleQuotesList(idleQuotesListEl, currentQuotes.default_idle_quotes, '通常つぶやきセリフが登録されていません。');
+  if (currentQuotes.time_specific_quotes) {
+    renderSimpleQuotesList(morningQuotesListEl, currentQuotes.time_specific_quotes.morning, '朝のセリフが登録されていません。');
+    renderSimpleQuotesList(afternoonQuotesListEl, currentQuotes.time_specific_quotes.afternoon, '昼のセリフが登録されていません。');
+    renderSimpleQuotesList(eveningQuotesListEl, currentQuotes.time_specific_quotes.evening, '夕方のセリフが登録されていません。');
+    renderSimpleQuotesList(nightQuotesListEl, currentQuotes.time_specific_quotes.night, '深夜のセリフが登録されていません。');
+  }
   renderVideoList();
 }
 
@@ -263,11 +285,18 @@ async function loadConfigs() {
     const res = await invoke('get_plugin_configs');
     currentSetting = res.setting || {};
     const rawQuotes = res.quotes || {};
+    const timeQuotes = rawQuotes.time_specific_quotes || {};
 
     // 構造の正規化
     currentQuotes = {
       touch_reactions: Array.isArray(rawQuotes.touch_reactions) ? rawQuotes.touch_reactions : [],
       default_idle_quotes: Array.isArray(rawQuotes.default_idle_quotes) ? rawQuotes.default_idle_quotes : [],
+      time_specific_quotes: {
+        morning: Array.isArray(timeQuotes.morning) ? timeQuotes.morning : [],
+        afternoon: Array.isArray(timeQuotes.afternoon) ? timeQuotes.afternoon : [],
+        evening: Array.isArray(timeQuotes.evening) ? timeQuotes.evening : [],
+        night: Array.isArray(timeQuotes.night) ? timeQuotes.night : []
+      },
       videos: (rawQuotes.videos && typeof rawQuotes.videos === 'object') ? rawQuotes.videos : {}
     };
 
@@ -278,6 +307,21 @@ async function loadConfigs() {
     if (inputDefaultDuration) inputDefaultDuration.value = currentSetting.default_duration_sec ?? 30;
     if (inputBubbleDuration) inputBubbleDuration.value = currentSetting.bubble_display_duration_sec ?? 30;
     if (inputTouchDuration) inputTouchDuration.value = currentSetting.touch_reaction_duration_sec ?? 8;
+
+    // 効果音設定のバインド (Issue #24)
+    if (toggleSoundEnabled) toggleSoundEnabled.checked = currentSetting.sound_enabled !== false;
+    const vol = currentSetting.sound_volume ?? 30;
+    if (inputSoundVolume) inputSoundVolume.value = vol;
+    if (soundVolumeDisplay) soundVolumeDisplay.textContent = `${vol}%`;
+
+    // マスコット表示サイズ（スケール）のバインド (Issue #25)
+    try {
+      const gConfig = await invoke('get_gadget_config');
+      if (gConfig && gConfig.mascot_scale) {
+        const targetRadio = document.querySelector(`input[name="mascot-scale"][value="${gConfig.mascot_scale}"]`);
+        if (targetRadio) targetRadio.checked = true;
+      }
+    } catch (_) {}
 
     renderAllQuotes();
   } catch (err) {
@@ -299,6 +343,39 @@ if (btnAddIdleQuote) {
   btnAddIdleQuote.addEventListener('click', () => {
     currentQuotes.default_idle_quotes.push('今日もがんばろうね！');
     renderSimpleQuotesList(idleQuotesListEl, currentQuotes.default_idle_quotes, '通常つぶやきセリフが登録されていません。');
+  });
+}
+
+// 時間帯別つぶやき追加ボタン
+if (btnAddMorningQuote) {
+  btnAddMorningQuote.addEventListener('click', () => {
+    if (!currentQuotes.time_specific_quotes) currentQuotes.time_specific_quotes = { morning: [], afternoon: [], evening: [], night: [] };
+    currentQuotes.time_specific_quotes.morning.push('おはよう！今日も一日がんばろうね！');
+    renderSimpleQuotesList(morningQuotesListEl, currentQuotes.time_specific_quotes.morning, '朝のセリフが登録されていません。');
+  });
+}
+
+if (btnAddAfternoonQuote) {
+  btnAddAfternoonQuote.addEventListener('click', () => {
+    if (!currentQuotes.time_specific_quotes) currentQuotes.time_specific_quotes = { morning: [], afternoon: [], evening: [], night: [] };
+    currentQuotes.time_specific_quotes.afternoon.push('こんにちは！お昼からもファイトだよ！');
+    renderSimpleQuotesList(afternoonQuotesListEl, currentQuotes.time_specific_quotes.afternoon, '昼のセリフが登録されていません。');
+  });
+}
+
+if (btnAddEveningQuote) {
+  btnAddEveningQuote.addEventListener('click', () => {
+    if (!currentQuotes.time_specific_quotes) currentQuotes.time_specific_quotes = { morning: [], afternoon: [], evening: [], night: [] };
+    currentQuotes.time_specific_quotes.evening.push('今日も一日お疲れさま！よくがんばったね！');
+    renderSimpleQuotesList(eveningQuotesListEl, currentQuotes.time_specific_quotes.evening, '夕方のセリフが登録されていません。');
+  });
+}
+
+if (btnAddNightQuote) {
+  btnAddNightQuote.addEventListener('click', () => {
+    if (!currentQuotes.time_specific_quotes) currentQuotes.time_specific_quotes = { morning: [], afternoon: [], evening: [], night: [] };
+    currentQuotes.time_specific_quotes.night.push('夜更かししすぎないようにね！');
+    renderSimpleQuotesList(nightQuotesListEl, currentQuotes.time_specific_quotes.night, '深夜のセリフが登録されていません。');
   });
 }
 
@@ -333,6 +410,110 @@ if (btnAddVideo) {
   });
 }
 
+// 音量スライダー変更時
+if (inputSoundVolume) {
+  inputSoundVolume.addEventListener('input', (e) => {
+    if (soundVolumeDisplay) soundVolumeDisplay.textContent = `${e.target.value}%`;
+  });
+}
+
+// テスト再生処理 (Web Audio API)
+let settingsAudioCtx = null;
+function playTestPreviewSound() {
+  if (!settingsAudioCtx) {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (AudioContextClass) settingsAudioCtx = new AudioContextClass();
+  }
+  if (settingsAudioCtx && settingsAudioCtx.state === 'suspended') {
+    settingsAudioCtx.resume().catch(() => {});
+  }
+  if (!settingsAudioCtx) return;
+
+  const isEnabled = toggleSoundEnabled ? toggleSoundEnabled.checked : true;
+  if (!isEnabled) {
+    showStatus('効果音が無効化されています（トグルをONにすると音が鳴ります）', 'error');
+    return;
+  }
+
+  const volumeRatio = (inputSoundVolume ? parseInt(inputSoundVolume.value, 10) : 30) / 100;
+  const ctx = settingsAudioCtx;
+  const now = ctx.currentTime;
+
+  // 1. ピコン♪ 通知音
+  const osc1 = ctx.createOscillator();
+  const gain1 = ctx.createGain();
+  osc1.type = 'sine';
+  osc1.frequency.setValueAtTime(1046.5, now);
+  gain1.gain.setValueAtTime(volumeRatio * 0.45, now);
+  gain1.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
+  osc1.connect(gain1);
+  gain1.connect(ctx.destination);
+  osc1.start(now);
+  osc1.stop(now + 0.12);
+
+  const osc2 = ctx.createOscillator();
+  const gain2 = ctx.createGain();
+  osc2.type = 'sine';
+  osc2.frequency.setValueAtTime(1567.98, now + 0.08);
+  gain2.gain.setValueAtTime(0.001, now);
+  gain2.gain.setValueAtTime(volumeRatio * 0.55, now + 0.08);
+  gain2.gain.exponentialRampToValueAtTime(0.0001, now + 0.35);
+  osc2.connect(gain2);
+  gain2.connect(ctx.destination);
+  osc2.start(now + 0.08);
+  osc2.stop(now + 0.35);
+
+  // 2. カタカタカタ… 打鍵音（通知音の直後、0.38秒後に70ms間隔で7打鍵プレビュー）
+  const configs = [
+    { startFreq: 1400, endFreq: 480, lowFreq: 320, noiseMix: 0.08 },
+    { startFreq: 1250, endFreq: 420, lowFreq: 280, noiseMix: 0.06 },
+    { startFreq: 1550, endFreq: 520, lowFreq: 350, noiseMix: 0.07 },
+    { startFreq: 1350, endFreq: 450, lowFreq: 300, noiseMix: 0.09 },
+  ];
+
+  for (let k = 0; k < 7; k++) {
+    const keyTime = now + 0.38 + (k * 0.07);
+    const duration = 0.035;
+    const length = Math.floor(ctx.sampleRate * duration);
+    const buf = ctx.createBuffer(1, length, ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    const cfg = configs[k % configs.length];
+
+    for (let j = 0; j < length; j++) {
+      const t = j / ctx.sampleRate;
+      const freq1 = cfg.startFreq * Math.exp(-t * 180) + cfg.endFreq;
+      const attack = Math.sin(2 * Math.PI * freq1 * t) * Math.exp(-t * 150);
+      const bottom = Math.sin(2 * Math.PI * cfg.lowFreq * t) * Math.exp(-t * 100);
+      const noise = (Math.random() * 2 - 1) * Math.exp(-t * 260) * cfg.noiseMix;
+      d[j] = (attack * 0.7 + bottom * 0.3 + noise) * (1 - t / duration);
+    }
+    const s = ctx.createBufferSource();
+    s.buffer = buf;
+    const g = ctx.createGain();
+    g.gain.value = volumeRatio * 0.45;
+    s.connect(g);
+    g.connect(ctx.destination);
+    s.start(keyTime);
+  }
+}
+
+if (btnTestSound) {
+  btnTestSound.addEventListener('click', playTestPreviewSound);
+}
+
+// マスコット表示サイズ（スケール）のリアルタイム切替 (Issue #25)
+scaleRadios.forEach(radio => {
+  radio.addEventListener('change', async (e) => {
+    if (e.target.checked) {
+      try {
+        await invoke('set_mascot_scale', { scale: e.target.value });
+      } catch (err) {
+        console.warn('Failed to set mascot scale:', err);
+      }
+    }
+  });
+});
+
 // フォルダを開くボタン
 btnOpenAvatarsDir.addEventListener('click', async () => {
   try {
@@ -361,6 +542,15 @@ btnResetDefaults.addEventListener('click', () => {
   if (inputDefaultDuration) inputDefaultDuration.value = 30;
   if (inputBubbleDuration) inputBubbleDuration.value = 30;
   if (inputTouchDuration) inputTouchDuration.value = 8;
+  if (toggleSoundEnabled) toggleSoundEnabled.checked = true;
+  if (inputSoundVolume) inputSoundVolume.value = 30;
+  if (soundVolumeDisplay) soundVolumeDisplay.textContent = '30%';
+
+  const stdRadio = document.querySelector('input[name="mascot-scale"][value="standard"]');
+  if (stdRadio) {
+    stdRadio.checked = true;
+    invoke('set_mascot_scale', { scale: 'standard' }).catch(() => {});
+  }
 
   currentQuotes = {
     touch_reactions: [
@@ -377,6 +567,28 @@ btnResetDefaults.addEventListener('click', () => {
       "お茶でも飲んで一息つこう！",
       "何か手伝えることがあったら言ってね！"
     ],
+    time_specific_quotes: {
+      morning: [
+        "おはよう！今日も一日がんばろうね！",
+        "朝の空気、気持ちいいね！深呼吸してみて！",
+        "朝ごはんは食べた？しっかりエネルギー補給しよう！"
+      ],
+      afternoon: [
+        "こんにちは！お昼からもファイトだよ！",
+        "少し休憩してお茶でも飲まない？",
+        "集中しててすごい！でもたまには肩の力を抜いてね。"
+      ],
+      evening: [
+        "今日も一日お疲れさま！よくがんばったね！",
+        "そろそろ夕暮れ時だね〜。今日の予定はひと段落ついた？",
+        "暗くなってきたね。目を休めながら進めよう！"
+      ],
+      night: [
+        "夜更かししすぎないようにね！",
+        "もう遅い時間だから、無理せず休んでね。",
+        "今日もたくさん進んだね！おやすみなさい…zzz"
+      ]
+    },
     videos: {
       "eating.mp4": {
         enabled: true,
@@ -477,11 +689,18 @@ btnSave.addEventListener('click', async () => {
     currentSetting.default_duration_sec = parseInt(inputDefaultDuration.value, 10) || 30;
     currentSetting.bubble_display_duration_sec = parseInt(inputBubbleDuration.value, 10) || 30;
     currentSetting.touch_reaction_duration_sec = parseInt(inputTouchDuration.value, 10) || 8;
+    currentSetting.sound_enabled = toggleSoundEnabled ? toggleSoundEnabled.checked : true;
+    currentSetting.sound_volume = inputSoundVolume ? parseInt(inputSoundVolume.value, 10) : 30;
 
     await invoke('save_plugin_configs', {
       setting: currentSetting,
       quotes: currentQuotes
     });
+
+    const checkedScale = document.querySelector('input[name="mascot-scale"]:checked');
+    if (checkedScale) {
+      await invoke('set_mascot_scale', { scale: checkedScale.value });
+    }
 
     showStatus('設定を保存してマスコットへ適用しました！', 'success');
   } catch (err) {

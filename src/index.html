@@ -26,7 +26,7 @@
     </header>
 
     <!-- ヒーローカード: アバター (R1) ＆ 利用枠メーター (R5) -->
-    <section class="hero-card" id="hero-card">
+    <section class="hero-card bubble-on-left" id="hero-card">
       <!-- 左側: アバター表示＋名称 -->
       <div class="avatar-column" id="avatar-column">
         <div class="avatar-holder" id="avatar-holder">
@@ -41,11 +41,21 @@
             <div class="mascot-restore-btn" id="mascot-restore-btn" title="通常画面に復元">⤢</div>
           </div>
           <div class="unread-badge hidden" id="unread-badge" style="display: none;" title="未読メッセージがあります（クリックで開く）"></div>
+          <button class="mascot-quick-input-btn" id="btn-mascot-quick-input" title="質問を入力 (💬)">💬</button>
         </div>
         <div class="avatar-name" id="avatar-name">
           <span class="avatar-name-text" id="avatar-name-text">ラッキー</span>
           <span class="avatar-limit-badge" id="avatar-limit-badge">--%</span>
         </div>
+      </div>
+
+      <!-- マスコットモード専用: クイック1行ミニ入力バー (Issue #27) -->
+      <div class="mascot-input-bar hidden" id="mascot-input-bar">
+        <div class="mascot-input-tail"></div>
+        <span class="mascot-input-icon">💬</span>
+        <input type="text" class="mascot-input-field" id="mascot-input-field" placeholder="Museに質問... (Enterで送信 / Escで閉じる)" autocomplete="off" />
+        <button class="mascot-input-btn-send" id="btn-mascot-input-send" title="送信 (Enter)">➤</button>
+        <button class="mascot-input-btn-close" id="btn-mascot-input-close" title="閉じる (Esc)">×</button>
       </div>
 
       <!-- マスコットモード専用: ルパン風吹き出し -->

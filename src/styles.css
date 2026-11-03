@@ -321,12 +321,12 @@ body {
   display: block;
   opacity: 0;
   transition: opacity 0.5s ease-in-out;
-  pointer-events: none;
+  pointer-events: none !important;
 }
 
 .avatar-video.active {
   opacity: 1;
-  pointer-events: auto;
+  pointer-events: none !important;
 }
 
 .avatar-video.hidden {
@@ -770,14 +770,67 @@ body.mode-mascot {
   overflow: hidden;
 }
 
+/* マスコットスケール切替 (Issue #25) - zoom を廃止し、WebView2 の動画描画カリング・消失を完全に防止 */
+body.mode-mascot {
+  --mascot-avatar-size: 116px;
+  --mascot-avatar-font: 11.5px;
+  --mascot-badge-font: 10px;
+  --mascot-bubble-w: 460px;
+  --mascot-bubble-font: 13px;
+  --mascot-bubble-title: 10.5px;
+  --mascot-bubble-max-h: 175px;
+  --mascot-unread-size: 24px;
+  --mascot-input-font: 12.5px;
+  --mascot-input-h: 42px;
+}
+
+body.mode-mascot.scale-small {
+  --mascot-avatar-size: 93px;
+  --mascot-avatar-font: 9.5px;
+  --mascot-badge-font: 8.5px;
+  --mascot-bubble-w: 368px;
+  --mascot-bubble-font: 10.5px;
+  --mascot-bubble-title: 9px;
+  --mascot-bubble-max-h: 140px;
+  --mascot-unread-size: 20px;
+  --mascot-input-font: 10.5px;
+  --mascot-input-h: 36px;
+}
+
+body.mode-mascot.scale-standard {
+  --mascot-avatar-size: 116px;
+  --mascot-avatar-font: 11.5px;
+  --mascot-badge-font: 10px;
+  --mascot-bubble-w: 460px;
+  --mascot-bubble-font: 13px;
+  --mascot-bubble-title: 10.5px;
+  --mascot-bubble-max-h: 175px;
+  --mascot-unread-size: 24px;
+  --mascot-input-font: 12.5px;
+  --mascot-input-h: 42px;
+}
+
+body.mode-mascot.scale-large {
+  --mascot-avatar-size: 145px;
+  --mascot-avatar-font: 14.5px;
+  --mascot-badge-font: 12.5px;
+  --mascot-bubble-w: 575px;
+  --mascot-bubble-font: 16px;
+  --mascot-bubble-title: 13px;
+  --mascot-bubble-max-h: 220px;
+  --mascot-unread-size: 30px;
+  --mascot-input-font: 15px;
+  --mascot-input-h: 52px;
+}
+
 body.mode-mascot .gadget-container {
   background: transparent !important;
   border: none !important;
   box-shadow: none !important;
   backdrop-filter: none !important;
   padding: 6px !important;
-  width: 100vw;
-  height: 100vh;
+  width: 100% !important;
+  height: 100% !important;
   box-sizing: border-box;
   display: flex !important;
   flex-direction: row !important;
@@ -817,7 +870,8 @@ body.mode-mascot .hero-card.bubble-on-right {
   justify-content: flex-start !important;
 }
 
-body.mode-mascot .hero-card.bubble-on-left .mascot-bubble-tail {
+body.mode-mascot .hero-card.bubble-on-left .mascot-bubble-tail,
+body.mode-mascot .hero-card.bubble-on-left .mascot-input-tail {
   left: auto !important;
   right: -8px !important;
   border-right: none !important;
@@ -825,7 +879,8 @@ body.mode-mascot .hero-card.bubble-on-left .mascot-bubble-tail {
   filter: drop-shadow(1.5px 0 0 rgba(56, 189, 248, 0.45)) !important;
 }
 
-body.mode-mascot .hero-card.bubble-on-left .mascot-bubble {
+body.mode-mascot .hero-card.bubble-on-left .mascot-bubble,
+body.mode-mascot .hero-card.bubble-on-left .mascot-input-bar {
   animation: bubblePopLeft 0.25s cubic-bezier(0.175, 0.885, 0.32, 1.275);
 }
 
@@ -851,11 +906,11 @@ body.mode-mascot .avatar-column:active {
 }
 
 body.mode-mascot .avatar-wrapper {
-  width: 116px;
-  height: 116px;
-  min-width: 116px;
+  width: var(--mascot-avatar-size, 116px);
+  height: var(--mascot-avatar-size, 116px);
+  min-width: var(--mascot-avatar-size, 116px);
   border-radius: 50% !important;
-  background: #ffffff;
+  background: rgba(15, 23, 42, 0.85);
   border: 2px solid rgba(56, 189, 248, 0.75);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55), 0 0 16px rgba(56, 189, 248, 0.4);
   position: relative;
@@ -927,7 +982,7 @@ body.mode-mascot .avatar-name {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  font-size: 11.5px;
+  font-size: var(--mascot-avatar-font, 11.5px);
   font-weight: 700;
   color: #ffffff;
   background: rgba(15, 23, 42, 0.88);
@@ -940,7 +995,7 @@ body.mode-mascot .avatar-name {
 
 .avatar-limit-badge {
   font-family: Consolas, monospace;
-  font-size: 10px;
+  font-size: var(--mascot-badge-font, 10px);
   font-weight: 700;
   color: var(--color-safe);
   background: rgba(255, 255, 255, 0.1);
@@ -978,10 +1033,10 @@ body.mode-mascot .unread-badge {
   position: absolute;
   top: 1px;
   right: 1px;
-  min-width: 24px;
-  height: 24px;
+  min-width: var(--mascot-unread-size, 24px);
+  height: var(--mascot-unread-size, 24px);
   padding: 0 6px;
-  border-radius: 12px;
+  border-radius: calc(var(--mascot-unread-size, 24px) / 2);
   background: linear-gradient(135deg, #ef4444, #dc2626);
   border: 2px solid #ffffff;
   color: #ffffff;
@@ -1028,8 +1083,8 @@ body:not(.mode-mascot) .unread-badge {
 /* ルパン風タイピング吹き出し */
 .mascot-bubble {
   position: relative;
-  width: 460px;
-  max-width: 480px;
+  width: var(--mascot-bubble-w, 460px);
+  max-width: var(--mascot-bubble-w, 460px);
   background: rgba(15, 23, 42, 0.94);
   backdrop-filter: blur(16px);
   border: 1.5px solid rgba(56, 189, 248, 0.45);
@@ -1071,7 +1126,7 @@ body:not(.mode-mascot) .unread-badge {
 }
 
 .mascot-bubble-title {
-  font-size: 10.5px;
+  font-size: var(--mascot-bubble-title, 10.5px);
   font-weight: 700;
   color: var(--color-accent);
   letter-spacing: 0.6px;
@@ -1096,7 +1151,7 @@ body:not(.mode-mascot) .unread-badge {
   margin: 0;
   padding: 0;
   padding-right: 4px;
-  max-height: 175px;
+  max-height: var(--mascot-bubble-max-h, 175px);
   overflow-y: auto;
   text-align: left;
   display: block;
@@ -1104,7 +1159,7 @@ body:not(.mode-mascot) .unread-badge {
 
 .mascot-bubble-text {
   font-family: Consolas, 'Courier New', monospace, sans-serif;
-  font-size: 13px;
+  font-size: var(--mascot-bubble-font, 13px);
   line-height: 1.55;
   color: #f8fafc;
   word-break: break-word;
@@ -1136,7 +1191,7 @@ body:not(.mode-mascot) .unread-badge {
   color: #10b981;
   font-weight: bold;
   margin-left: 2px;
-  font-size: 13px;
+  font-size: var(--mascot-bubble-font, 13px);
   animation: cursorBlink 0.6s infinite;
 }
 
@@ -1158,4 +1213,144 @@ body:not(.mode-mascot) .unread-badge {
 @keyframes cursorBlink {
   0%, 100% { opacity: 1; }
   50% { opacity: 0; }
+}
+
+/* ==========================================
+   クイック1行ミニ入力バー (Issue #27)
+   ========================================== */
+body.mode-mascot .mascot-quick-input-btn {
+  position: absolute;
+  bottom: 4px;
+  left: 4px;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: rgba(15, 23, 42, 0.9);
+  backdrop-filter: blur(8px);
+  border: 1.5px solid rgba(56, 189, 248, 0.65);
+  color: #38bdf8;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  z-index: 25;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease, transform 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
+  user-select: none;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+}
+
+body.mode-mascot .avatar-holder:hover .mascot-quick-input-btn,
+body.mode-mascot .avatar-column:hover .mascot-quick-input-btn,
+body.mode-mascot .mascot-quick-input-btn:hover {
+  opacity: 1;
+  pointer-events: auto;
+  transform: scale(1.15);
+  background: #0284c7;
+  color: #ffffff;
+  box-shadow: 0 0 12px rgba(56, 189, 248, 0.7);
+}
+
+body:not(.mode-mascot) .mascot-quick-input-btn {
+  display: none !important;
+}
+
+.mascot-input-bar {
+  position: relative;
+  width: var(--mascot-bubble-w, 460px);
+  max-width: var(--mascot-bubble-w, 460px);
+  height: var(--mascot-input-h, 42px);
+  background: rgba(15, 23, 42, 0.94);
+  backdrop-filter: blur(16px);
+  border: 1.5px solid rgba(56, 189, 248, 0.65);
+  border-radius: calc(var(--mascot-input-h, 42px) / 2);
+  padding: 0 8px 0 14px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.7), 0 0 16px rgba(56, 189, 248, 0.35);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  animation: bubblePop 0.25s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  box-sizing: border-box;
+  z-index: 10;
+}
+
+.mascot-input-bar.hidden {
+  display: none !important;
+}
+
+.mascot-input-tail {
+  position: absolute;
+  left: -8px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 0;
+  height: 0;
+  border-top: 7px solid transparent;
+  border-bottom: 7px solid transparent;
+  border-right: 8px solid rgba(15, 23, 42, 0.94);
+  filter: drop-shadow(-1.5px 0 0 rgba(56, 189, 248, 0.65));
+}
+
+.mascot-input-icon {
+  font-size: 14px;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.mascot-input-field {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: #f8fafc;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-size: var(--mascot-input-font, 12.5px);
+  line-height: 1.4;
+  min-width: 0;
+  padding: 0;
+}
+
+.mascot-input-field::placeholder {
+  color: rgba(255, 255, 255, 0.4);
+}
+
+.mascot-input-btn-send {
+  background: rgba(56, 189, 248, 0.2);
+  border: 1px solid rgba(56, 189, 248, 0.5);
+  color: #38bdf8;
+  border-radius: 50%;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 11px;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+}
+
+.mascot-input-btn-send:hover {
+  background: #38bdf8;
+  color: #0f172a;
+  transform: scale(1.1);
+  box-shadow: 0 0 8px #38bdf8;
+}
+
+.mascot-input-btn-close {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 16px;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+  transition: color 0.15s ease;
+  flex-shrink: 0;
+}
+
+.mascot-input-btn-close:hover {
+  color: #ffffff;
 }

@@ -44,6 +44,37 @@
           </div>
         </div>
 
+        <!-- マスコット表示サイズ (Issue #25) -->
+        <div class="card">
+          <div class="card-header">
+            <h3>📐 マスコット表示サイズ（スケール）</h3>
+          </div>
+          <p class="card-desc">お使いのディスプレイ解像度や作業スペースに合わせて、マスコットの大きさを変更できます。</p>
+          <div class="scale-options-grid">
+            <label class="scale-option-card">
+              <input type="radio" name="mascot-scale" value="small">
+              <div class="scale-card-content">
+                <span class="scale-label">小 (80%)</span>
+                <span class="scale-desc">省スペース・ノートPC向け</span>
+              </div>
+            </label>
+            <label class="scale-option-card">
+              <input type="radio" name="mascot-scale" value="standard" checked>
+              <div class="scale-card-content">
+                <span class="scale-label">標準 (100%)</span>
+                <span class="scale-desc">標準的なフルHD画面向け</span>
+              </div>
+            </label>
+            <label class="scale-option-card">
+              <input type="radio" name="mascot-scale" value="large">
+              <div class="scale-card-content">
+                <span class="scale-label">大 (125%)</span>
+                <span class="scale-desc">高解像度（WQHD / 4K）向け</span>
+              </div>
+            </label>
+          </div>
+        </div>
+
         <div class="card">
           <div class="card-header">
             <h3>動作タイマー設定（秒単位）</h3>
@@ -96,6 +127,41 @@
             </div>
           </div>
         </div>
+
+        <!-- 効果音設定 (Issue #24) -->
+        <div class="card">
+          <div class="card-header">
+            <h3>🔊 効果音（SE）設定</h3>
+          </div>
+          <p class="card-desc">新着メッセージ通知音（ピコン♪）や吹き出しタイピング音（カタカタ…）、タッチ反応音を設定できます。</p>
+
+          <div class="sound-setting-group">
+            <div class="sound-toggle-row">
+              <div class="sound-label-area">
+                <span class="sound-title">効果音を鳴らす</span>
+                <span class="form-hint">新着通知やセリフ表示時の効果音を有効化します</span>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="toggle-sound-enabled" checked>
+                <span class="slider"></span>
+              </label>
+            </div>
+
+            <div class="sound-volume-row">
+              <div class="sound-label-area">
+                <label for="input-sound-volume">
+                  効果音の音量
+                  <span class="unit" id="sound-volume-display">30%</span>
+                </label>
+                <span class="form-hint">全体の音量を調整します（0〜100%）</span>
+              </div>
+              <div class="volume-slider-wrapper">
+                <input type="range" id="input-sound-volume" min="0" max="100" step="1" value="30">
+                <button type="button" class="btn btn-secondary btn-sm" id="btn-test-sound">🔊 テスト再生</button>
+              </div>
+            </div>
+          </div>
+        </div>
       </section>
 
       <!-- タブ2: 放置アクション ＆ セリフ -->
@@ -120,6 +186,59 @@
           <div class="quotes-section">
             <div id="idle-quotes-list" class="quotes-list"></div>
             <button class="btn-add-quote" id="btn-add-idle-quote">＋ つぶやきセリフを追加</button>
+          </div>
+        </div>
+
+        <!-- 時間帯別のつぶやき（朝・昼・夕方・深夜） -->
+        <div class="card">
+          <div class="card-header">
+            <h3>⏰ 時間帯別のつぶやき（朝・昼・夕方・深夜）</h3>
+          </div>
+          <p class="card-desc">現在時刻に応じた挨拶やつぶやきです。放置アクション時に優先的に選ばれます（時間帯セリフ 70% / 通常セリフ 30%）。</p>
+          <div class="time-slots-container">
+            <!-- 朝 -->
+            <div class="time-slot-card">
+              <div class="time-slot-header">
+                <h4>🌅 朝のセリフ (05:00 - 10:59)</h4>
+              </div>
+              <div class="quotes-section">
+                <div id="morning-quotes-list" class="quotes-list"></div>
+                <button class="btn-add-quote" id="btn-add-morning-quote">＋ 朝のセリフを追加</button>
+              </div>
+            </div>
+
+            <!-- 昼 -->
+            <div class="time-slot-card">
+              <div class="time-slot-header">
+                <h4>☀️ 昼のセリフ (11:00 - 16:59)</h4>
+              </div>
+              <div class="quotes-section">
+                <div id="afternoon-quotes-list" class="quotes-list"></div>
+                <button class="btn-add-quote" id="btn-add-afternoon-quote">＋ 昼のセリフを追加</button>
+              </div>
+            </div>
+
+            <!-- 夕方 -->
+            <div class="time-slot-card">
+              <div class="time-slot-header">
+                <h4>🌆 夕方のセリフ (17:00 - 21:59)</h4>
+              </div>
+              <div class="quotes-section">
+                <div id="evening-quotes-list" class="quotes-list"></div>
+                <button class="btn-add-quote" id="btn-add-evening-quote">＋ 夕方のセリフを追加</button>
+              </div>
+            </div>
+
+            <!-- 深夜 -->
+            <div class="time-slot-card">
+              <div class="time-slot-header">
+                <h4>🌙 夜・深夜のセリフ (22:00 - 04:59)</h4>
+              </div>
+              <div class="quotes-section">
+                <div id="night-quotes-list" class="quotes-list"></div>
+                <button class="btn-add-quote" id="btn-add-night-quote">＋ 深夜のセリフを追加</button>
+              </div>
+            </div>
           </div>
         </div>
 
