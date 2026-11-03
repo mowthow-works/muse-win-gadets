@@ -1042,6 +1042,16 @@ async fn toggle_minimize_restore(app: AppHandle) -> Result<String, String> {
 }
 
 #[tauri::command]
+async fn open_mascot_devtools(app: AppHandle) -> Result<bool, String> {
+    if let Some(main_win) = app.get_webview_window("main") {
+        main_win.open_devtools();
+        Ok(true)
+    } else {
+        Err("main window not found".to_string())
+    }
+}
+
+#[tauri::command]
 async fn open_session_devtools(app: AppHandle) -> Result<bool, String> {
     let session = ensure_session_window(&app)?;
     session.open_devtools();
@@ -1096,7 +1106,8 @@ pub fn run() {
             // システムトレイの初期化
             let toggle_app = MenuItem::with_id(handle, "toggle_app", "セッション画面 ⇄ マスコット (Ctrl+Shift+M)", true, None::<&str>)?;
             let open_session = MenuItem::with_id(handle, "open_session", "セッション画面を開く (公式UI)", true, None::<&str>)?;
-            let open_devtools = MenuItem::with_id(handle, "open_devtools", "セッションの開発者ツールを開く", true, None::<&str>)?;
+            let item_open_mascot_devtools = MenuItem::with_id(handle, "open_mascot_devtools", "マスコットの開発者ツールを開く", true, None::<&str>)?;
+            let item_open_session_devtools = MenuItem::with_id(handle, "open_devtools", "セッションの開発者ツールを開く", true, None::<&str>)?;
             let toggle_mascot = MenuItem::with_id(handle, "toggle_mascot", "マスコットモード (アバター単体)", true, None::<&str>)?;
             let toggle_size = MenuItem::with_id(handle, "toggle_size", "（旧）中・小画面切替", true, None::<&str>)?;
             let open_browser = MenuItem::with_id(handle, "open_browser", "ブラウザで Muse を開く", true, None::<&str>)?;
@@ -1107,7 +1118,8 @@ pub fn run() {
                 &[
                     &toggle_app,
                     &open_session,
-                    &open_devtools,
+                    &item_open_mascot_devtools,
+                    &item_open_session_devtools,
                     &toggle_mascot,
                     &toggle_size,
                     &open_browser,
@@ -1131,6 +1143,12 @@ pub fn run() {
                         let app_clone = app.clone();
                         tauri::async_runtime::spawn(async move {
                             let _ = open_or_show_session(app_clone).await;
+                        });
+                    }
+                    "open_mascot_devtools" => {
+                        let app_clone = app.clone();
+                        tauri::async_runtime::spawn(async move {
+                            let _ = open_mascot_devtools(app_clone).await;
                         });
                     }
                     "open_devtools" => {
@@ -1262,6 +1280,7 @@ pub fn run() {
             open_in_browser,
             open_or_show_session,
             hide_session,
+            open_mascot_devtools,
             open_session_devtools,
             get_session_status,
             drag_window,

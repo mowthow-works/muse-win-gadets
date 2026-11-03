@@ -6,13 +6,13 @@ Muse（パーソナルAIエージェント `https://muse.ai`）の Windows 向�
 <div align="center">
   <table>
     <tr>
-      <td align="center" width="38%">
-        <b>✨ マスコット状態（デスクトップ常駐）</b><br />
-        <img src="docs/screenshot_mascot.png" alt="Muse Desktop Mascot Mode" width="280" />
+      <td align="center" width="40%">
+        <b>✨ マスコット状態（タスクバー・デスクトップ常駐）</b><br />
+        <img src="docs/screenshot_mascot.png" alt="Muse Desktop Mascot Mode" width="300" />
       </td>
-      <td align="center" width="62%">
+      <td align="center" width="60%">
         <b>💬 チャット画面（Muse AI セッション画面）</b><br />
-        <img src="docs/screenshot_session.png" alt="Muse AI Session Chat Screen" width="520" />
+        <img src="docs/screenshot_session.png" alt="Muse AI Session Chat Screen" width="500" />
       </td>
     </tr>
   </table>
@@ -53,8 +53,33 @@ v0.8.0 以降、ガジェット独自の小・大チャット枠から **「デ�
   - **カスタムアプリアイコン**: タスクバーおよびシステムトレイに Muse アバター（ラッキー）のアイコンを採用。
   - **多重起動防止 ＆ 確実なプロセス終了**: Windows 名前付きミューテックスによる重複起動防止と、タスクバー／トレイからの確実なプロセス完全終了に対応。
 - **R5: ウィンドウリミット（利用枠）の可視化 ＆ マスコット枠色連動 (Issue #19) 【✅ 現行】**
-  - **アバター外周枠＆光彩（グロー）のリアルタイム色変化**: 残り利用可能枠（ウィンドウLimit）に応じて、安全（80%以上: エメラルドグリーン `#10b981`）、注意（30〜79%: アンバーオレンジ `#f59e0b`）、危険（29%以下: ローズレッド `#ef4444`）へとマスコット外周枠の色と光彩が自動連動。
-  - **ネームプレート内への % 表示**: マスコット下部のネームプレート内に `[ ラッキー 83% ]` のように利用可能残量をコンパクトに常時表示します。
+  - **アバター外周枠＆光彩（グロー）のリアルタイム色変化**: 残り利用可能枠（ウィンドウLimit）に応じて、安全（80%以上: エメラルドグリーン `#10b981`）、注意（50〜79%: アンバーオレンジ `#f59e0b`）、危険（50%未満: ローズレッド `#ef4444`）へとマスコット外周枠の色と光彩が自動連動。
+  - **ネームプレート内への % 表示**: マスコット下部のネームプレート内に `[ ラッキー 85% ]` のように利用可能残量をコンパクトに常時表示します。
+  - **未読通知バッジ (Issue #20)**: セッション画面が裏や非表示の間に新着メッセージを受信すると、アバターの右肩に鮮やかな赤丸通知バッジ（`🔴 1`〜`9+`）がピョコッと出現。
+
+<div align="center">
+  <table>
+    <tr>
+      <th align="center">🟢 安全（残り80%以上）</th>
+      <th align="center">🟠 注意警戒（50%〜79%）</th>
+      <th align="center">🔴 危険（50%未満）＋ 未読通知</th>
+    </tr>
+    <tr>
+      <td align="center">
+        <img src="docs/mascot_status_safe.png" alt="安全（緑枠・85%）" width="170" /><br />
+        <b><code>[ ラッキー 85% ]</code></b>
+      </td>
+      <td align="center">
+        <img src="docs/mascot_status_warn.png" alt="注意（オレンジ枠・59%）" width="170" /><br />
+        <b><code>[ ラッキー 59% ]</code></b>
+      </td>
+      <td align="center">
+        <img src="docs/mascot_status_danger.png" alt="危険（赤枠・15% ＋ 未読通知バッジ）" width="170" /><br />
+        <b><code>[ ラッキー 15% ]</code> ＋ 🔴<code>1</code></b>
+      </td>
+    </tr>
+  </table>
+</div>
 - **R6: ブラウザで開く 【✅ 現行】**
   - システムトレイアイコンの右クリックメニュー「ブラウザで Muse を開く」から、既定の Web ブラウザで直接 `https://muse.ai` を開けます。
 - **R7: 1アクションでのモード切替 ＆ フォーカス自動連動 【🔄 マスコット ⇄ チャット画面トグルへ刷新】**
@@ -95,7 +120,23 @@ v0.8.0 以降、ガジェット独自の小・大チャット枠から **「デ�
 | **他アプリを操作（チャット画面が裏へ）** | マスコットが自動的に最前面へ現れる（チャット画面が表に戻ると自動非表示） |
 | **`Ctrl + Shift + M`** | チャット画面 ⇄ マスコット状態の表示トグル（グローバルホットキー） |
 | **トレイアイコン左クリック** | チャット画面 ⇄ マスコット状態の表示トグル |
-| **トレイアイコン右クリック / タスクバーから閉じる** | コンテキストメニュー表示 / ガジェットの完全終了 |
+| **トレイアイコン右クリック** | コンテキストメニュー表示（開発者ツール起動、ブラウザ起動、完全終了 等） |
+
+#### システムトレイ（右クリックメニュー）の項目一覧
+- **セッション画面 ⇄ マスコット (`Ctrl+Shift+M`)**: チャット画面とマスコットをトグル切替
+- **セッション画面を開く (公式UI)**: Muse AI チャットウィンドウを表示
+- **マスコットの開発者ツールを開く (Issue #21)**: マスコット画面専用の DevTools（検証ツール）を起動
+- **セッションの開発者ツールを開く**: 公式チャット画面専用の DevTools を起動
+- **マスコットモード (アバター単体)**: マスコットのみを表示
+- **ブラウザで Muse を開く**: 既定のブラウザで `https://muse.ai` を開く
+- **終了**: プロセスを完全に終了
+
+> [!TIP]
+> **マスコットの開発者ツール（DevTools）の活用例**
+> トレイメニューの「マスコットの開発者ツールを開く」から DevTools を開き、`Console` タブで以下の JavaScript を実行すると、スクリーンショット撮影や動作確認用に枠色や未読バッジを自由に変更できます：
+> - **緑枠（安全・85%）**: `document.getElementById('avatar-container').className = 'avatar-wrapper limit-safe'; const b = document.getElementById('avatar-limit-badge'); b.className = 'avatar-limit-badge limit-safe'; b.textContent = '85%';`
+> - **赤枠（危険・15% ＋ 未読バッジ）**: `document.getElementById('avatar-container').className = 'avatar-wrapper limit-danger'; const b = document.getElementById('avatar-limit-badge'); b.className = 'avatar-limit-badge limit-danger'; b.textContent = '15%'; const u = document.getElementById('unread-badge'); u.textContent = '1'; u.classList.remove('hidden'); u.style.display = 'flex';`
+> - **吹き出し表示**: `playLupinTyping('テストメッセージです！');`
 
 ### 🎨 アバター動画の準備・セリフ・動作タイマーのカスタマイズ（プラグイン方式・ホットリロード対応）
 本リポジトリには、著作権および汎用性（ユーザーごとにアバターが異なる点）への配慮から **アバター動画（`.mp4` ファイル）を含めていません**（設定ファイル `setting.json` と `quotes.json` のみ同梱されています）。
