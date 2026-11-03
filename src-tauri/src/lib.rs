@@ -406,18 +406,59 @@ async fn run_bridge_action(
 // Tauri コマンド群
 // ==========================================
 
-fn collect_avatar_dirs(app: &AppHandle) -> Vec<PathBuf> {
-    let mut avatar_dirs: Vec<PathBuf> = Vec::new();
+fn get_writable_avatar_dir(app: &AppHandle) -> PathBuf {
+    // 1. 実行ファイルと同じ階層の avatars (インストールフォルダ または ポータブル配布フォルダ)
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            let exe_str = exe_dir.to_string_lossy().to_lowercase();
+            // Cargo 開発用ビルド出力ディレクトリ (target\debug, target\release) でない場合はインストールフォルダを最優先
+            let is_cargo_target = exe_str.contains("target\\debug") || exe_str.contains("target\\release");
+            if !is_cargo_target {
+                return exe_dir.join("avatars");
+            }
+        }
+    }
 
-    // 1. プロジェクト内の src-tauri/assets/avatars (開発・ローカル差し替え最優先)
+    // 2. 開発時: src-tauri/assets/avatars
     let manifest_avatars = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("assets")
         .join("avatars");
     if manifest_avatars.exists() {
-        avatar_dirs.push(manifest_avatars);
+        return manifest_avatars;
     }
 
-    // 2. 実行ファイルと同じ階層の avatars フォルダ (ポータブル配布対応)
+    // 3. フォールバック: %LOCALAPPDATA%\works.mowthow.muse.gadgets\avatars
+    if let Ok(local_dir) = app.path().app_local_data_dir() {
+        return local_dir.join("avatars");
+    }
+
+    PathBuf::from("avatars")
+}
+
+// インストール先・配布先への初期設定ファイル（setting.json / quotes.json）の自動シード配置
+fn ensure_avatar_seeds(app: &AppHandle) {
+    let base_dir = get_writable_avatar_dir(app);
+    let _ = fs::create_dir_all(&base_dir);
+
+    // avatars/setting.json
+    let setting_path = base_dir.join("setting.json");
+    if !setting_path.exists() {
+        let _ = fs::write(&setting_path, EMBEDDED_SETTING_JSON);
+    }
+
+    // avatars/plugin/quotes.json
+    let plugin_dir = base_dir.join("plugin");
+    let _ = fs::create_dir_all(&plugin_dir);
+    let quotes_path = plugin_dir.join("quotes.json");
+    if !quotes_path.exists() {
+        let _ = fs::write(&quotes_path, EMBEDDED_QUOTES_JSON);
+    }
+}
+
+fn collect_avatar_dirs(app: &AppHandle) -> Vec<PathBuf> {
+    let mut avatar_dirs: Vec<PathBuf> = Vec::new();
+
+    // 1. 実行ファイルと同じ階層の avatars フォルダ (インストール先 / ポータブル最優先)
     if let Ok(exe_path) = std::env::current_exe() {
         if let Some(exe_dir) = exe_path.parent() {
             let exe_avatars = exe_dir.join("avatars");
@@ -427,12 +468,32 @@ fn collect_avatar_dirs(app: &AppHandle) -> Vec<PathBuf> {
         }
     }
 
+    // 2. resource_dir (NSIS インストーラ同梱リソース)
+    if let Ok(res_dir) = app.path().resource_dir() {
+        let r1 = res_dir.join("assets").join("avatars");
+        if r1.exists() {
+            avatar_dirs.push(r1);
+        }
+        let r2 = res_dir.join("avatars");
+        if r2.exists() {
+            avatar_dirs.push(r2);
+        }
+    }
+
     // 3. %LOCALAPPDATA%\works.mowthow.muse.gadgets\avatars
     if let Ok(local_dir) = app.path().app_local_data_dir() {
         let appdata_avatars = local_dir.join("avatars");
         if appdata_avatars.exists() {
             avatar_dirs.push(appdata_avatars);
         }
+    }
+
+    // 4. プロジェクト内の src-tauri/assets/avatars (開発用フォールバック)
+    let manifest_avatars = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("assets")
+        .join("avatars");
+    if manifest_avatars.exists() && !avatar_dirs.contains(&manifest_avatars) {
+        avatar_dirs.push(manifest_avatars);
     }
 
     avatar_dirs
@@ -502,19 +563,7 @@ fn save_plugin_configs(
     setting: serde_json::Value,
     quotes: serde_json::Value,
 ) -> Result<bool, String> {
-    let avatar_dirs = collect_avatar_dirs(&app);
-    let target_dir = if let Some(first) = avatar_dirs.first() {
-        first.clone()
-    } else if let Ok(exe_path) = std::env::current_exe() {
-        if let Some(exe_dir) = exe_path.parent() {
-            exe_dir.join("avatars")
-        } else {
-            PathBuf::from("avatars")
-        }
-    } else {
-        PathBuf::from("avatars")
-    };
-
+    let target_dir = get_writable_avatar_dir(&app);
     let _ = fs::create_dir_all(&target_dir);
     let setting_path = target_dir.join("setting.json");
     let setting_str = serde_json::to_string_pretty(&setting)
@@ -540,19 +589,8 @@ fn save_plugin_configs(
 
 #[tauri::command]
 fn open_avatar_dir(app: AppHandle, target: String) -> Result<bool, String> {
-    let avatar_dirs = collect_avatar_dirs(&app);
-    let base_dir = if let Some(first) = avatar_dirs.first() {
-        first.clone()
-    } else if let Ok(exe_path) = std::env::current_exe() {
-        if let Some(exe_dir) = exe_path.parent() {
-            exe_dir.join("avatars")
-        } else {
-            PathBuf::from("avatars")
-        }
-    } else {
-        PathBuf::from("avatars")
-    };
-
+    ensure_avatar_seeds(&app);
+    let base_dir = get_writable_avatar_dir(&app);
     let dir_to_open = if target == "plugin" {
         base_dir.join("plugin")
     } else {
@@ -1217,6 +1255,9 @@ pub fn run() {
         .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, Some(vec!["--autostart"])))
         .setup(|app| {
             let handle = app.handle();
+
+            // 初期設定ファイル（setting.json / quotes.json）の自動シード配置
+            ensure_avatar_seeds(handle);
 
             // システムトレイの初期化
             let toggle_app = MenuItem::with_id(handle, "toggle_app", "セッション画面 ⇄ マスコット (Ctrl+Shift+M)", true, None::<&str>)?;

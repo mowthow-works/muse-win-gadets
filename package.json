@@ -1,13 +1,15 @@
 {
   "name": "muse-desktop-mascot",
   "private": true,
-  "version": "0.9.0",
+  "version": "1.0.0",
   "description": "Windows Desktop Mascot for Muse AI",
   "license": "MIT",
   "type": "module",
   "scripts": {
     "dev": "tauri dev",
     "build": "tauri build",
+    "build:debug": "tauri build --debug",
+    "build:installer": "tauri build",
     "tauri": "tauri"
   },
   "devDependencies": {

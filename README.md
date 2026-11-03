@@ -1,4 +1,4 @@
-# Muse Desktop Mascot (v0.9.0)
+# Muse Desktop Mascot (v1.0.0)
 
 Muse（パーソナルAIエージェント `https://muse.ai`）の Windows 向け常駐型デスクトップマスコット＆チャット連携アプリです。  
 普段はデスクトップの隅に円形アバターマスコットとして控えめに常駐し、Muse の状態に応じたアニメーション・気まぐれアクション・新着メッセージのルパン風タイピング吹き出しを表示します。ダブルクリックやショートカットキー（`Ctrl + Shift + M`）で、いつでもフル機能の Muse AI チャット画面（セッション画面）を即座に呼び出せます。
@@ -24,7 +24,7 @@ Muse（パーソナルAIエージェント `https://muse.ai`）の Windows 向�
 
 v0.8.0 以降、ガジェット独自の小・大チャット枠から **「デスクトップ常駐マスコット状態 ⇄ 公式フル機能のチャット画面（セッション画面）」の2形態連携** へ刷新されたため、初期要件 R1〜R7 の現在の実装・運用ステータスは以下の通りとなっています：
 
-| 要件 | 機能概要 | 現在のステータス (v0.9.0) |
+| 要件 | 機能概要 | 現在のステータス (v1.0.0) |
 | :--- | :--- | :--- |
 | **R1** | アバターアニメーション・状態同期・放置プラグイン演出 | **✅ 現行メイン機能** |
 | **R2** | チャットスレッド閲覧・新着通知 | **🔄 公式チャット画面 ＋ マスコットのルパン風吹き出し通知へ統合**（※旧ガジェット独自スレッド枠は通常非表示） |
@@ -224,10 +224,25 @@ npm run dev
 ```
 
 ### プロダクションビルド
+
+#### 1. ポータブル単体実行ファイル（手動配置・ZIP 配布向け）
 ```powershell
-npm run build
+cargo build --release --manifest-path "src-tauri/Cargo.toml"
 ```
 ビルド完了後、`src-tauri/target/release/muse-desktop-mascot.exe` が生成されます。
+
+#### 2. NSIS セットアップインストーラ（一般配布・簡単導入向け） (Issue #14)
+```powershell
+npm run build:installer
+# または
+npx tauri build
+```
+ビルド完了後、`src-tauri/target/release/bundle/nsis/Muse Desktop Mascot_<version>_x64-setup.exe` が生成されます。
+- **特徴**: UAC 管理者昇格プロンプトが不要なユーザー権限（Per-user）インストールに対応。デスクトップショートカット、スタートメニュー、アンインストーラが自動構成され、初期設定ファイル（`setting.json` / `quotes.json`）が同梱展開されます。
+
+> [!NOTE]
+> **Microsoft Store / MSIX パッケージングについて (Issue #14)**
+> Microsoft Store への提出や SmartScreen 警告対策を見据えた MSIX 化を行う場合は、Windows 10/11 SDK の `MakeAppx.exe` および自己署名または EV コード署名証明書（`SignTool.exe`）を用いて、上記生成バイナリを MSIX コンテナへパッケージング可能です。
 
 ---
 

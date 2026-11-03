@@ -42,4 +42,4 @@
 - **通常の開発・動作確認時**:
   - ビルド時間の短縮のため、**Debug ビルド（`cargo build`）** で実施し、生成された `src-tauri/target/debug/muse-desktop-mascot.exe` を `dist/muse-desktop-mascot.exe` へ配置してユーザーへ動作確認を依頼すること（この段階での配布用 ZIP 作成は不要）。
 - **Release 時（ユーザーから「Releaseします！」と指示された時）**:
-  - 初めて **Release ビルド（`cargo build --release`）** を行い、最適化された `.exe` を `dist/` へ上書き配置し、配布用 ZIP アーカイブ（`muse-desktop-mascot-v*.zip`）を作成・更新すること。
+  - 初めて **Release ビルドおよびインストーラ作成（`npm run build:installer` / `npx tauri build`）** を行い、最適化された `.exe` を `dist/` へ上書き配置し、配布用 ZIP アーカイブ（`muse-desktop-mascot-v*.zip`）および NSIS セットアップインストーラ（`bundle/nsis/*.exe`）を作成・Release へ添付すること。通常開発時はインストーラ作成を行わないこと。
