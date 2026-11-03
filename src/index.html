@@ -29,15 +29,18 @@
     <section class="hero-card" id="hero-card">
       <!-- 左側: アバター表示＋名称 -->
       <div class="avatar-column" id="avatar-column">
-        <div class="avatar-wrapper" id="avatar-container" title="クリックでリアクション / ダブルクリックで画面を開く">
-          <video id="avatar-video-a" class="avatar-video active" autoplay loop muted playsinline></video>
-          <video id="avatar-video-b" class="avatar-video" autoplay loop muted playsinline></video>
-          <div class="avatar-fallback hidden" id="avatar-fallback">
-            <div class="avatar-ring"></div>
-            <span class="avatar-placeholder-text">Muse</span>
-            <button class="avatar-fetch-btn" id="btn-fetch-avatar" title="動画取得">取得</button>
+        <div class="avatar-holder" id="avatar-holder">
+          <div class="avatar-wrapper" id="avatar-container" title="クリックでリアクション / ダブルクリックで画面を開く">
+            <video id="avatar-video-a" class="avatar-video active" autoplay loop muted playsinline></video>
+            <video id="avatar-video-b" class="avatar-video" autoplay loop muted playsinline></video>
+            <div class="avatar-fallback hidden" id="avatar-fallback">
+              <div class="avatar-ring"></div>
+              <span class="avatar-placeholder-text">Muse</span>
+              <button class="avatar-fetch-btn" id="btn-fetch-avatar" title="動画取得">取得</button>
+            </div>
+            <div class="mascot-restore-btn" id="mascot-restore-btn" title="通常画面に復元">⤢</div>
           </div>
-          <div class="mascot-restore-btn" id="mascot-restore-btn" title="通常画面に復元">⤢</div>
+          <div class="unread-badge hidden" id="unread-badge" style="display: none;" title="未読メッセージがあります（クリックで開く）"></div>
         </div>
         <div class="avatar-name" id="avatar-name">
           <span class="avatar-name-text" id="avatar-name-text">ラッキー</span>

@@ -276,6 +276,13 @@ body {
   gap: 4px;
 }
 
+.avatar-holder {
+  position: relative;
+  display: inline-flex;
+  justify-content: center;
+  align-items: center;
+}
+
 .avatar-name {
   font-size: 11px;
   font-weight: 700;
@@ -957,8 +964,65 @@ body.mode-mascot .avatar-name {
   background: rgba(239, 68, 68, 0.22);
 }
 
+/* 共通非表示ユーティリティ */
+.hidden {
+  display: none !important;
+}
+
 body:not(.mode-mascot) .avatar-limit-badge {
   display: none;
+}
+
+/* マスコット未読通知バッジ (Issue #20) */
+body.mode-mascot .unread-badge {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 6px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #ef4444, #dc2626);
+  border: 2px solid #ffffff;
+  color: #ffffff;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-size: 11px;
+  font-weight: 800;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 12px rgba(239, 68, 68, 0.65), 0 2px 6px rgba(0, 0, 0, 0.4);
+  z-index: 20;
+  cursor: pointer;
+  user-select: none;
+  animation: unreadPop 0.35s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  box-sizing: border-box;
+  transition: transform 0.15s ease, filter 0.15s ease;
+}
+
+body.mode-mascot .unread-badge.hidden,
+.unread-badge.hidden {
+  display: none !important;
+}
+
+body.mode-mascot .unread-badge:hover {
+  transform: scale(1.15);
+  filter: brightness(1.1);
+}
+
+@keyframes unreadPop {
+  0% {
+    opacity: 0;
+    transform: scale(0.3);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+body:not(.mode-mascot) .unread-badge {
+  display: none !important;
 }
 
 /* ルパン風タイピング吹き出し */

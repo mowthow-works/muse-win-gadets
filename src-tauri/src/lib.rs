@@ -7,7 +7,7 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, LogicalSize, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use tauri::{AppHandle, Emitter, LogicalSize, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 use tauri_plugin_opener::OpenerExt;
 use base64::prelude::*;
@@ -241,10 +241,11 @@ fn ensure_session_window(app: &AppHandle) -> Result<WebviewWindow, String> {
                 }
             }
             tauri::WindowEvent::Focused(true) => {
-                // セッション画面が表に出た（フォーカス獲得）: マスコットを非表示にする
+                // セッション画面が表に出た（フォーカス獲得）: マスコットへ未読クリアを通知し、マスコットを非表示にする
                 let h = handle_for_session.clone();
                 tauri::async_runtime::spawn(async move {
                     if let Some(main_win) = h.get_webview_window("main") {
+                        let _ = main_win.emit("clear-unread", ());
                         let _ = main_win.hide();
                     }
                 });
@@ -973,8 +974,9 @@ async fn open_in_browser(app: AppHandle) -> Result<(), String> {
 async fn open_or_show_session(app: AppHandle) -> Result<SessionStatus, String> {
     let session = ensure_session_window(&app)?;
     
-    // セッション表示時はマスコットを非表示にする
+    // セッション表示時はマスコットへ未読クリアを通知し、マスコットを非表示にする
     if let Some(main_win) = app.get_webview_window("main") {
+        let _ = main_win.emit("clear-unread", ());
         let _ = main_win.hide();
     }
 

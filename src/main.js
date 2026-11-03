@@ -32,8 +32,11 @@ const btnFetchAvatar = document.getElementById('btn-fetch-avatar');
 const avatarNameEl = document.getElementById('avatar-name');
 const avatarNameTextEl = document.getElementById('avatar-name-text');
 const avatarLimitBadgeEl = document.getElementById('avatar-limit-badge');
+const unreadBadgeEl = document.getElementById('unread-badge');
 const avatarColumn = document.getElementById('avatar-column');
 const mascotRestoreBtn = document.getElementById('mascot-restore-btn');
+
+let unreadCount = 0;
 
 // マスコット吹き出し要素
 const mascotBubble = document.getElementById('mascot-bubble');
@@ -160,6 +163,26 @@ function hideMascotBubble() {
   }
 }
 
+// 未読バッジ表示制御 (Issue #20)
+function updateUnreadBadge() {
+  if (!unreadBadgeEl) return;
+  if (unreadCount > 0) {
+    unreadBadgeEl.textContent = unreadCount > 9 ? '9+' : String(unreadCount);
+    unreadBadgeEl.title = `未読メッセージが ${unreadCount} 件あります（クリックで開く）`;
+    unreadBadgeEl.classList.remove('hidden');
+    unreadBadgeEl.style.display = 'flex';
+  } else {
+    unreadBadgeEl.textContent = '';
+    unreadBadgeEl.classList.add('hidden');
+    unreadBadgeEl.style.display = 'none';
+  }
+}
+
+function clearUnreadBadge() {
+  unreadCount = 0;
+  updateUnreadBadge();
+}
+
 // Muse のストリーミング返信がすべて完了した瞬間に確定表示するコミット関数
 function commitPendingAssistantMessage() {
   if (assistantCommitTimer) {
@@ -178,6 +201,12 @@ function commitPendingAssistantMessage() {
   setAvatarState('milestone_level_up', { durationMs: 6000, force: true, lockDuration: true });
   if (document.body.classList.contains('mode-mascot')) {
     playLupinTyping(textToPlay);
+  }
+
+  // セッション画面が表に出ていない場合は未読バッジをカウントアップ (Issue #20)
+  if (!isSessionVisible) {
+    unreadCount++;
+    updateUnreadBadge();
   }
 }
 
@@ -892,6 +921,9 @@ async function updateSessionStatus() {
   try {
     const status = await invoke('get_session_status');
     isSessionVisible = status.visible;
+    if (isSessionVisible) {
+      clearUnreadBadge();
+    }
   } catch (err) {
     console.warn('updateSessionStatus error:', err);
   }
@@ -919,6 +951,7 @@ async function enterMascotMode() {
 
 async function restoreFromMascot() {
   try {
+    clearUnreadBadge();
     // 中・小画面の代わりにセッションウィンドウ（公式画面）を前面表示
     await invoke('open_or_show_session');
   } catch (err) {
@@ -1110,6 +1143,25 @@ window.addEventListener('DOMContentLoaded', async () => {
       loadAvatar(true);
     });
   }
+
+  // 未読バッジクリック時: 既読クリアしてセッション画面を開く (Issue #20)
+  if (unreadBadgeEl) {
+    unreadBadgeEl.addEventListener('click', (e) => {
+      e.stopPropagation();
+      clearUnreadBadge();
+      restoreFromMascot();
+    });
+  }
+
+  // セッション画面が前面化・開かれた際の未読クリアイベントを受信 (Issue #20)
+  if (window.__TAURI__ && window.__TAURI__.event && typeof window.__TAURI__.event.listen === 'function') {
+    window.__TAURI__.event.listen('clear-unread', () => {
+      clearUnreadBadge();
+    });
+  }
+
+  // 初期起動時は確実に未読バッジを非表示 (Issue #20)
+  clearUnreadBadge();
 
   // 利用枠再取得
   btnRefreshLimit.addEventListener('click', () => loadUsageLimit(true));
