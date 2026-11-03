@@ -30,6 +30,8 @@ const avatarVideoB = document.getElementById('avatar-video-b');
 const avatarFallback = document.getElementById('avatar-fallback');
 const btnFetchAvatar = document.getElementById('btn-fetch-avatar');
 const avatarNameEl = document.getElementById('avatar-name');
+const avatarNameTextEl = document.getElementById('avatar-name-text');
+const avatarLimitBadgeEl = document.getElementById('avatar-limit-badge');
 const avatarColumn = document.getElementById('avatar-column');
 const mascotRestoreBtn = document.getElementById('mascot-restore-btn');
 
@@ -193,8 +195,12 @@ async function runHealthCheck() {
   try {
     const h = await invoke('check_bridge_health');
     if (!h) return;
-    if (h.avatar_name && avatarNameEl) {
-      avatarNameEl.textContent = h.avatar_name;
+    if (h.avatar_name) {
+      if (avatarNameTextEl) {
+        avatarNameTextEl.textContent = h.avatar_name;
+      } else if (avatarNameEl) {
+        avatarNameEl.textContent = h.avatar_name;
+      }
     }
 
     if (h.avatar_state) {
@@ -814,22 +820,47 @@ async function loadUsageLimit(forceRefresh = false) {
       planBadge.textContent = limit.plan_name || '無料プラン';
 
       if (limit.remaining_percent !== null && limit.remaining_percent !== undefined) {
-        limitPercentText.textContent = `残 ${limit.remaining_percent}%`;
-        limitProgressBar.style.width = `${limit.remaining_percent}%`;
+        const pct = limit.remaining_percent;
+        limitPercentText.textContent = `残 ${pct}%`;
+        limitProgressBar.style.width = `${pct}%`;
 
         limitProgressBar.className = 'progress-bar';
-        if (limit.remaining_percent >= 80) {
+        let limitLevel = 'safe';
+        if (pct >= 80) {
+          limitLevel = 'safe';
           limitPercentText.style.color = 'var(--color-safe)';
-        } else if (limit.remaining_percent >= 30) {
+        } else if (pct >= 30) {
+          limitLevel = 'warn';
           limitProgressBar.classList.add('warn');
           limitPercentText.style.color = 'var(--color-warn)';
         } else {
+          limitLevel = 'danger';
           limitProgressBar.classList.add('danger');
           limitPercentText.style.color = 'var(--color-danger)';
+        }
+
+        // マスコットのアバター外枠色とグロー効果を連動 (Issue #19)
+        if (avatarContainer) {
+          avatarContainer.classList.remove('limit-safe', 'limit-warn', 'limit-danger');
+          avatarContainer.classList.add(`limit-${limitLevel}`);
+        }
+
+        // ネームプレート内の % バッジを更新 (Issue #19)
+        if (avatarLimitBadgeEl) {
+          avatarLimitBadgeEl.textContent = `${pct}%`;
+          avatarLimitBadgeEl.className = `avatar-limit-badge limit-${limitLevel}`;
+          avatarLimitBadgeEl.title = `利用可能枠: 残り ${pct}% (${limit.reset_text || ''})`;
         }
       } else {
         limitPercentText.textContent = '--%';
         limitProgressBar.style.width = '0%';
+        if (avatarContainer) {
+          avatarContainer.classList.remove('limit-safe', 'limit-warn', 'limit-danger');
+        }
+        if (avatarLimitBadgeEl) {
+          avatarLimitBadgeEl.textContent = '--%';
+          avatarLimitBadgeEl.className = 'avatar-limit-badge';
+        }
       }
 
       limitResetText.textContent = limit.reset_text || '利用枠情報未取得';
@@ -1110,8 +1141,12 @@ window.addEventListener('DOMContentLoaded', async () => {
         currentLimit = config.message_limit;
         msgLimitSelect.value = String(currentLimit);
       }
-      if (config.avatar_name && avatarNameEl) {
-        avatarNameEl.textContent = config.avatar_name;
+      if (config.avatar_name) {
+        if (avatarNameTextEl) {
+          avatarNameTextEl.textContent = config.avatar_name;
+        } else if (avatarNameEl) {
+          avatarNameEl.textContent = config.avatar_name;
+        }
       }
     }
   } catch (e) {
