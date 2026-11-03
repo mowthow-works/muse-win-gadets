@@ -123,6 +123,59 @@
           </div>
         </div>
 
+        <!-- 時間帯別のつぶやき（朝・昼・夕方・深夜） -->
+        <div class="card">
+          <div class="card-header">
+            <h3>⏰ 時間帯別のつぶやき（朝・昼・夕方・深夜）</h3>
+          </div>
+          <p class="card-desc">現在時刻に応じた挨拶やつぶやきです。放置アクション時に優先的に選ばれます（時間帯セリフ 70% / 通常セリフ 30%）。</p>
+          <div class="time-slots-container">
+            <!-- 朝 -->
+            <div class="time-slot-card">
+              <div class="time-slot-header">
+                <h4>🌅 朝のセリフ (05:00 - 10:59)</h4>
+              </div>
+              <div class="quotes-section">
+                <div id="morning-quotes-list" class="quotes-list"></div>
+                <button class="btn-add-quote" id="btn-add-morning-quote">＋ 朝のセリフを追加</button>
+              </div>
+            </div>
+
+            <!-- 昼 -->
+            <div class="time-slot-card">
+              <div class="time-slot-header">
+                <h4>☀️ 昼のセリフ (11:00 - 16:59)</h4>
+              </div>
+              <div class="quotes-section">
+                <div id="afternoon-quotes-list" class="quotes-list"></div>
+                <button class="btn-add-quote" id="btn-add-afternoon-quote">＋ 昼のセリフを追加</button>
+              </div>
+            </div>
+
+            <!-- 夕方 -->
+            <div class="time-slot-card">
+              <div class="time-slot-header">
+                <h4>🌆 夕方のセリフ (17:00 - 21:59)</h4>
+              </div>
+              <div class="quotes-section">
+                <div id="evening-quotes-list" class="quotes-list"></div>
+                <button class="btn-add-quote" id="btn-add-evening-quote">＋ 夕方のセリフを追加</button>
+              </div>
+            </div>
+
+            <!-- 深夜 -->
+            <div class="time-slot-card">
+              <div class="time-slot-header">
+                <h4>🌙 夜・深夜のセリフ (22:00 - 04:59)</h4>
+              </div>
+              <div class="quotes-section">
+                <div id="night-quotes-list" class="quotes-list"></div>
+                <button class="btn-add-quote" id="btn-add-night-quote">＋ 深夜のセリフを追加</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <!-- プラグイン動画ごとの設定 -->
         <div class="card">
           <div class="action-bar">

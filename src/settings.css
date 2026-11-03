@@ -565,3 +565,28 @@ input:checked + .slider:before {
   display: flex;
   gap: 10px;
 }
+
+/* 時間帯別セリフカード */
+.time-slots-container {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.time-slot-card {
+  background: rgba(15, 23, 42, 0.4);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  padding: 12px;
+}
+
+.time-slot-header {
+  margin-bottom: 8px;
+}
+
+.time-slot-header h4 {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent-blue);
+  margin: 0;
+}

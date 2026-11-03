@@ -313,6 +313,64 @@ let touchReactionsList = [
   "えへへ、よろしくね！"
 ];
 
+// 時間帯に応じたつぶやき（朝・昼・夕方・深夜）（quotes.json で上書き可能）
+let timeSpecificQuotesMap = {
+  morning: [
+    "おはよう！今日も一日がんばろうね！",
+    "朝の空気、気持ちいいね！深呼吸してみて！",
+    "朝ごはんは食べた？しっかりエネルギー補給しよう！"
+  ],
+  afternoon: [
+    "こんにちは！お昼からもファイトだよ！",
+    "少し休憩してお茶でも飲まない？",
+    "集中しててすごい！でもたまには肩の力を抜いてね。"
+  ],
+  evening: [
+    "今日も一日お疲れさま！よくがんばったね！",
+    "そろそろ夕暮れ時だね〜。今日の予定はひと段落ついた？",
+    "暗くなってきたね。目を休めながら進めよう！"
+  ],
+  night: [
+    "夜更かししすぎないようにね！",
+    "もう遅い時間だから、無理せず休んでね。",
+    "今日もたくさん進んだね！おやすみなさい…zzz"
+  ]
+};
+
+function getCurrentTimeSlot() {
+  const hour = new Date().getHours();
+  if (hour >= 5 && hour < 11) return 'morning';
+  if (hour >= 11 && hour < 17) return 'afternoon';
+  if (hour >= 17 && hour < 22) return 'evening';
+  return 'night';
+}
+
+function pickRandomIdleQuote(candidateQuotes = null) {
+  const slot = getCurrentTimeSlot();
+  const timeQuotes = timeSpecificQuotesMap[slot] || [];
+
+  // もしプラグイン動画固有のセリフが明示的にあり、かつデフォルト一覧と異なる場合
+  if (candidateQuotes && candidateQuotes.length > 0 && candidateQuotes !== defaultIdleQuotesList) {
+    if (timeQuotes.length > 0 && Math.random() < 0.3) {
+      return timeQuotes[Math.floor(Math.random() * timeQuotes.length)];
+    }
+    return candidateQuotes[Math.floor(Math.random() * candidateQuotes.length)];
+  }
+
+  // デフォルトまたは候補なしの場合:
+  // 現在の時間帯セリフがあれば 70% の確率で時間帯セリフ、30% の確率で通常の放置セリフ
+  if (timeQuotes.length > 0 && (defaultIdleQuotesList.length === 0 || Math.random() < 0.7)) {
+    return timeQuotes[Math.floor(Math.random() * timeQuotes.length)];
+  }
+  if (defaultIdleQuotesList.length > 0) {
+    return defaultIdleQuotesList[Math.floor(Math.random() * defaultIdleQuotesList.length)];
+  }
+  if (timeQuotes.length > 0) {
+    return timeQuotes[Math.floor(Math.random() * timeQuotes.length)];
+  }
+  return '';
+}
+
 function applyPluginConfigs(setting, quotes) {
   if (setting && typeof setting === 'object') {
     if (setting.idle_threshold_sec !== undefined) {
@@ -341,6 +399,14 @@ function applyPluginConfigs(setting, quotes) {
     }
     if (Array.isArray(quotes.default_idle_quotes) && quotes.default_idle_quotes.length > 0) {
       defaultIdleQuotesList = quotes.default_idle_quotes;
+    }
+    if (quotes.time_specific_quotes && typeof quotes.time_specific_quotes === 'object') {
+      timeSpecificQuotesMap = {
+        morning: Array.isArray(quotes.time_specific_quotes.morning) ? quotes.time_specific_quotes.morning : [],
+        afternoon: Array.isArray(quotes.time_specific_quotes.afternoon) ? quotes.time_specific_quotes.afternoon : [],
+        evening: Array.isArray(quotes.time_specific_quotes.evening) ? quotes.time_specific_quotes.evening : [],
+        night: Array.isArray(quotes.time_specific_quotes.night) ? quotes.time_specific_quotes.night : []
+      };
     }
     if (quotes.videos && typeof quotes.videos === 'object') {
       videoQuotesConfigMap = quotes.videos;
@@ -652,9 +718,8 @@ function checkIdleAction() {
 
     // 4. セリフ表示（quote_probability に応じて表示）
     if (document.body.classList.contains('mode-mascot') && Math.random() <= selected.cfg.quote_probability) {
-      const pool = selected.cfg.quotes;
-      if (pool && pool.length > 0) {
-        const quote = pool[Math.floor(Math.random() * pool.length)];
+      const quote = pickRandomIdleQuote(selected.cfg.quotes);
+      if (quote) {
         playLupinTyping(quote);
       }
     }
@@ -662,9 +727,11 @@ function checkIdleAction() {
     const durationMs = Math.max(1, pluginSettings.default_action_duration_sec || 30) * 1000;
     const randomAction = Math.random() < 0.5 ? 'waking' : 'working';
     setAvatarState(randomAction, { durationMs, lockDuration: true, force: true });
-    if (document.body.classList.contains('mode-mascot') && defaultIdleQuotesList.length > 0) {
-      const quote = defaultIdleQuotesList[Math.floor(Math.random() * defaultIdleQuotesList.length)];
-      playLupinTyping(quote);
+    if (document.body.classList.contains('mode-mascot')) {
+      const quote = pickRandomIdleQuote();
+      if (quote) {
+        playLupinTyping(quote);
+      }
     }
   }
 }

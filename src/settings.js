@@ -92,6 +92,15 @@ const btnAddTouchQuote = document.getElementById('btn-add-touch-quote');
 const idleQuotesListEl = document.getElementById('idle-quotes-list');
 const btnAddIdleQuote = document.getElementById('btn-add-idle-quote');
 
+const morningQuotesListEl = document.getElementById('morning-quotes-list');
+const btnAddMorningQuote = document.getElementById('btn-add-morning-quote');
+const afternoonQuotesListEl = document.getElementById('afternoon-quotes-list');
+const btnAddAfternoonQuote = document.getElementById('btn-add-afternoon-quote');
+const eveningQuotesListEl = document.getElementById('evening-quotes-list');
+const btnAddEveningQuote = document.getElementById('btn-add-evening-quote');
+const nightQuotesListEl = document.getElementById('night-quotes-list');
+const btnAddNightQuote = document.getElementById('btn-add-night-quote');
+
 const videoSettingsList = document.getElementById('video-settings-list');
 const btnAddVideo = document.getElementById('btn-add-video');
 const btnOpenAvatarsDir = document.getElementById('btn-open-avatars-dir');
@@ -254,6 +263,12 @@ function renderVideoList() {
 function renderAllQuotes() {
   renderSimpleQuotesList(touchQuotesListEl, currentQuotes.touch_reactions, 'リアクションセリフが登録されていません。');
   renderSimpleQuotesList(idleQuotesListEl, currentQuotes.default_idle_quotes, '通常つぶやきセリフが登録されていません。');
+  if (currentQuotes.time_specific_quotes) {
+    renderSimpleQuotesList(morningQuotesListEl, currentQuotes.time_specific_quotes.morning, '朝のセリフが登録されていません。');
+    renderSimpleQuotesList(afternoonQuotesListEl, currentQuotes.time_specific_quotes.afternoon, '昼のセリフが登録されていません。');
+    renderSimpleQuotesList(eveningQuotesListEl, currentQuotes.time_specific_quotes.evening, '夕方のセリフが登録されていません。');
+    renderSimpleQuotesList(nightQuotesListEl, currentQuotes.time_specific_quotes.night, '深夜のセリフが登録されていません。');
+  }
   renderVideoList();
 }
 
@@ -263,11 +278,18 @@ async function loadConfigs() {
     const res = await invoke('get_plugin_configs');
     currentSetting = res.setting || {};
     const rawQuotes = res.quotes || {};
+    const timeQuotes = rawQuotes.time_specific_quotes || {};
 
     // 構造の正規化
     currentQuotes = {
       touch_reactions: Array.isArray(rawQuotes.touch_reactions) ? rawQuotes.touch_reactions : [],
       default_idle_quotes: Array.isArray(rawQuotes.default_idle_quotes) ? rawQuotes.default_idle_quotes : [],
+      time_specific_quotes: {
+        morning: Array.isArray(timeQuotes.morning) ? timeQuotes.morning : [],
+        afternoon: Array.isArray(timeQuotes.afternoon) ? timeQuotes.afternoon : [],
+        evening: Array.isArray(timeQuotes.evening) ? timeQuotes.evening : [],
+        night: Array.isArray(timeQuotes.night) ? timeQuotes.night : []
+      },
       videos: (rawQuotes.videos && typeof rawQuotes.videos === 'object') ? rawQuotes.videos : {}
     };
 
@@ -299,6 +321,39 @@ if (btnAddIdleQuote) {
   btnAddIdleQuote.addEventListener('click', () => {
     currentQuotes.default_idle_quotes.push('今日もがんばろうね！');
     renderSimpleQuotesList(idleQuotesListEl, currentQuotes.default_idle_quotes, '通常つぶやきセリフが登録されていません。');
+  });
+}
+
+// 時間帯別つぶやき追加ボタン
+if (btnAddMorningQuote) {
+  btnAddMorningQuote.addEventListener('click', () => {
+    if (!currentQuotes.time_specific_quotes) currentQuotes.time_specific_quotes = { morning: [], afternoon: [], evening: [], night: [] };
+    currentQuotes.time_specific_quotes.morning.push('おはよう！今日も一日がんばろうね！');
+    renderSimpleQuotesList(morningQuotesListEl, currentQuotes.time_specific_quotes.morning, '朝のセリフが登録されていません。');
+  });
+}
+
+if (btnAddAfternoonQuote) {
+  btnAddAfternoonQuote.addEventListener('click', () => {
+    if (!currentQuotes.time_specific_quotes) currentQuotes.time_specific_quotes = { morning: [], afternoon: [], evening: [], night: [] };
+    currentQuotes.time_specific_quotes.afternoon.push('こんにちは！お昼からもファイトだよ！');
+    renderSimpleQuotesList(afternoonQuotesListEl, currentQuotes.time_specific_quotes.afternoon, '昼のセリフが登録されていません。');
+  });
+}
+
+if (btnAddEveningQuote) {
+  btnAddEveningQuote.addEventListener('click', () => {
+    if (!currentQuotes.time_specific_quotes) currentQuotes.time_specific_quotes = { morning: [], afternoon: [], evening: [], night: [] };
+    currentQuotes.time_specific_quotes.evening.push('今日も一日お疲れさま！よくがんばったね！');
+    renderSimpleQuotesList(eveningQuotesListEl, currentQuotes.time_specific_quotes.evening, '夕方のセリフが登録されていません。');
+  });
+}
+
+if (btnAddNightQuote) {
+  btnAddNightQuote.addEventListener('click', () => {
+    if (!currentQuotes.time_specific_quotes) currentQuotes.time_specific_quotes = { morning: [], afternoon: [], evening: [], night: [] };
+    currentQuotes.time_specific_quotes.night.push('夜更かししすぎないようにね！');
+    renderSimpleQuotesList(nightQuotesListEl, currentQuotes.time_specific_quotes.night, '深夜のセリフが登録されていません。');
   });
 }
 
@@ -377,6 +432,28 @@ btnResetDefaults.addEventListener('click', () => {
       "お茶でも飲んで一息つこう！",
       "何か手伝えることがあったら言ってね！"
     ],
+    time_specific_quotes: {
+      morning: [
+        "おはよう！今日も一日がんばろうね！",
+        "朝の空気、気持ちいいね！深呼吸してみて！",
+        "朝ごはんは食べた？しっかりエネルギー補給しよう！"
+      ],
+      afternoon: [
+        "こんにちは！お昼からもファイトだよ！",
+        "少し休憩してお茶でも飲まない？",
+        "集中しててすごい！でもたまには肩の力を抜いてね。"
+      ],
+      evening: [
+        "今日も一日お疲れさま！よくがんばったね！",
+        "そろそろ夕暮れ時だね〜。今日の予定はひと段落ついた？",
+        "暗くなってきたね。目を休めながら進めよう！"
+      ],
+      night: [
+        "夜更かししすぎないようにね！",
+        "もう遅い時間だから、無理せず休んでね。",
+        "今日もたくさん進んだね！おやすみなさい…zzz"
+      ]
+    },
     videos: {
       "eating.mp4": {
         enabled: true,
