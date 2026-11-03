@@ -115,7 +115,19 @@ Muse 本体の状態同期やクリックリアクションで使用する基本
 | `milestone_level_up.mp4` | マスコットをシングルクリックしたときの喜びリアクション動画 |
 
 #### ステップ 2: 放置中（IDLE）のランダム動画追加（`plugin` フォルダ）
-- `src-tauri/assets/avatars/plugin/` フォルダ内に任意の `.mp4` ファイル（例: `eating.mp4`, `makeup.mp4`, `sleeping.mp4`, `smartphone.mp4` など）を入れるだけで、起動時に自動スキャンされ、IDLE（放置）時のランダム再生対象になります。
+Muse が待機中（IDLE）に気まぐれで行うアクション動画を追加できます。
+
+1. Muse のチャット欄で以下のように依頼して、バリエーション動画のダウンロードリンクを出力してもらいます：
+   > 「あなたのアバター動画のバリエーション（食事、メイク、睡眠、スマホ操作など）のダウンロードリンクを一覧で出力して」
+2. ダウンロードした `.mp4` ファイルを、配布版の **`avatars/plugin/`** フォルダ（開発時は `src-tauri/assets/avatars/plugin/`、または `%LOCALAPPDATA%\works.mowthow.muse.gadgets\avatars\plugin\`）に保存します。
+   - `quotes.json` にあらかじめ以下のファイル名に対応したセリフが設定されています：
+     - `eating.mp4`（食事）
+     - `makeup.mp4`（お化粧）
+     - `sleeping.mp4`（居眠り）
+     - `smartphone.mp4`（スマホ操作）
+     - `waking.mp4`（伸び・リフレッシュ）
+     - `working.mp4`（キーボードカタカタ）
+   - ※上記以外の任意の名前の `.mp4` ファイルを入れた場合でも自動スキャンされ、標準のランダム再生対象になります。
 
 #### ステップ 3: IDLEまでの時間・全体動作タイマーの設定（`setting.json`）
 `src-tauri/assets/avatars/setting.json` と `src-tauri/assets/avatars/plugin/quotes.json` は **アプリ起動中でもファイルを保存するだけで3秒以内に自動反映（ホットリロード）** されます。
