@@ -1,0 +1,8 @@
+{
+  "idle_threshold_sec": 180,
+  "action_interval_sec": 15,
+  "default_action_duration_sec": 30,
+  "touch_reaction_duration_sec": 8,
+  "bubble_display_duration_sec": 30,
+  "avoid_repeat_video": true
+}

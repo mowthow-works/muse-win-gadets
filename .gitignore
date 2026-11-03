@@ -17,6 +17,10 @@ src-tauri/target/
 **/target/
 *.zip
 
+# User-specific avatar videos (excluded from Git; JSON configs are tracked)
+src-tauri/assets/avatars/*.mp4
+src-tauri/assets/avatars/plugin/*.mp4
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

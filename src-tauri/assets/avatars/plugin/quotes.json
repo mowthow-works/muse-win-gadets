@@ -1,0 +1,102 @@
+{
+  "touch_reactions": [
+    "はーい！呼んだ？",
+    "なになに〜？",
+    "ここにいるよ！",
+    "がんばろうね！",
+    "何か聞きたいことある？",
+    "えへへ、よろしくね！"
+  ],
+  "default_idle_quotes": [
+    "いつでも呼んでね！",
+    "今日もいい天気だね〜",
+    "お茶でも飲んで一息つこう！",
+    "何か手伝えることがあったら言ってね！"
+  ],
+  "videos": {
+    "eating.mp4": {
+      "enabled": true,
+      "min_idle_sec": 0,
+      "max_idle_sec": null,
+      "time_ranges": ["00:00-23:59"],
+      "duration_sec": 30,
+      "weight": 1,
+      "quote_probability": 1.0,
+      "quotes": [
+        "もぐもぐ…たい焼き、甘くておいしい〜！",
+        "ちょっとおやつタイムにするね♪",
+        "頭を使ったあとは甘いものに限るね！"
+      ]
+    },
+    "makeup.mp4": {
+      "enabled": true,
+      "min_idle_sec": 0,
+      "max_idle_sec": null,
+      "time_ranges": ["00:00-23:59"],
+      "duration_sec": 30,
+      "weight": 1,
+      "quote_probability": 1.0,
+      "quotes": [
+        "ちょっと身だしなみチェック中…♪",
+        "よし、今日もバッチリかな！",
+        "パタパタ…どう？似合うかな？"
+      ]
+    },
+    "sleeping.mp4": {
+      "enabled": true,
+      "min_idle_sec": 0,
+      "max_idle_sec": null,
+      "time_ranges": ["00:00-23:59"],
+      "duration_sec": 30,
+      "weight": 1,
+      "quote_probability": 1.0,
+      "quotes": [
+        "すやぁ…ちょっとだけうたた寝…",
+        "ふぁ〜…少し眠くなってきちゃった…zzZ",
+        "むにゃむにゃ…いつでも起こしてね…"
+      ]
+    },
+    "smartphone.mp4": {
+      "enabled": true,
+      "min_idle_sec": 0,
+      "max_idle_sec": null,
+      "time_ranges": ["00:00-23:59"],
+      "duration_sec": 30,
+      "weight": 1,
+      "quote_probability": 1.0,
+      "quotes": [
+        "スマホでちょっとトレンドチェック中〜",
+        "ふむふむ、面白いニュース見つけたよ！",
+        "何か新しい連絡きてないかな〜"
+      ]
+    },
+    "waking.mp4": {
+      "enabled": true,
+      "min_idle_sec": 0,
+      "max_idle_sec": null,
+      "time_ranges": ["00:00-23:59"],
+      "duration_sec": 30,
+      "weight": 1,
+      "quote_probability": 1.0,
+      "quotes": [
+        "ふぁ〜、背伸び！リフレッシュ完了！",
+        "ずっと座ってたから、ちょっとストレッチ♪",
+        "いつでも動けるように準備万端だよ！"
+      ]
+    },
+    "working.mp4": {
+      "enabled": true,
+      "min_idle_sec": 0,
+      "max_idle_sec": null,
+      "time_ranges": ["00:00-23:59"],
+      "duration_sec": 30,
+      "weight": 1,
+      "quote_probability": 1.0,
+      "quotes": [
+        "カタカタ…次のタスクの予習をしておくね！",
+        "今のうちにちょっとメモを整理中…",
+        "いつでもサポートできるように準備中だよ！"
+      ]
+    }
+  }
+}

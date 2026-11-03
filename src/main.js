@@ -25,7 +25,8 @@ const btnClose = document.getElementById('btn-close');
 const dragHeader = document.getElementById('drag-header');
 
 const avatarContainer = document.getElementById('avatar-container');
-const avatarVideo = document.getElementById('avatar-video');
+const avatarVideoA = document.getElementById('avatar-video-a');
+const avatarVideoB = document.getElementById('avatar-video-b');
 const avatarFallback = document.getElementById('avatar-fallback');
 const btnFetchAvatar = document.getElementById('btn-fetch-avatar');
 const avatarNameEl = document.getElementById('avatar-name');
@@ -132,10 +133,11 @@ function playLupinTyping(text) {
       setTimeout(() => {
         mascotBubbleCursor.classList.add('hidden');
       }, 700);
-      // 30秒後に自動的にフェードアウト
+      // setting.json の bubble_display_duration_sec 秒後に自動的にフェードアウト
+      const bubbleDurationMs = Math.max(1, Number(pluginSettings.bubble_display_duration_sec) || 30) * 1000;
       autoHideTimer = setTimeout(() => {
         mascotBubble.classList.add('hidden');
-      }, 30000);
+      }, bubbleDurationMs);
     }
   }, delay);
 }
@@ -172,20 +174,22 @@ async function runHealthCheck() {
       avatarNameEl.textContent = h.avatar_name;
     }
 
-    // Muse本体の動画ソース（blob URL）変更を検知して自動追従
-    if (h.avatar_src) {
-      if (lastKnownAvatarBlobUrl && lastKnownAvatarBlobUrl !== h.avatar_src) {
-        lastKnownAvatarBlobUrl = h.avatar_src;
-        // 本体側で動画が切り替わったため再取得して反映
-        loadAvatar(true).catch(() => {});
-      } else if (!lastKnownAvatarBlobUrl) {
-        lastKnownAvatarBlobUrl = h.avatar_src;
+    if (h.avatar_state) {
+      if (h.avatar_state === 'working' || h.avatar_state === 'making_something') {
+        recordInteraction();
+        setAvatarState(h.avatar_state);
+      } else if (h.avatar_state === 'milestone_level_up') {
+        recordInteraction();
+        setAvatarState('milestone_level_up', { durationMs: 4000 });
       }
     }
 
-    const isAvatarPlaying = !avatarVideo.classList.contains('hidden') && !!avatarVideo.src;
+    const isAvatarPlaying = !!avatarVideoPack && (
+      (!avatarVideoA?.classList.contains('hidden') && !!avatarVideoA?.src) ||
+      (!avatarVideoB?.classList.contains('hidden') && !!avatarVideoB?.src)
+    );
     const r1Ok = !!h.r1_avatar?.ok || isAvatarPlaying;
-    const r1Detail = h.r1_avatar?.ok ? h.r1_avatar.selector : (isAvatarPlaying ? 'cached-video' : 'none');
+    const r1Detail = isAvatarPlaying ? 'video-pack' : (h.r1_avatar?.ok ? h.r1_avatar.selector : 'none');
     setHealthPill(healthR1, 'R1', r1Ok, r1Detail);
     setHealthPill(healthR2, 'R2', !!h.r2_messages?.ok, h.r2_messages?.selector);
     setHealthPill(healthR3, 'R3', !!h.r3_input?.ok, h.r3_input?.selector);
@@ -207,25 +211,430 @@ async function runHealthCheck() {
 }
 
 // ==========================================
-// 1. アバター動画 (R1)
+// 1. アバター動画エンジン (500ms クロスフェード & ステートマシン)
 // ==========================================
-async function loadAvatar(forceRefresh = false) {
+let avatarVideoPack = null;
+let pluginItems = [];
+let lastPickedPluginKey = null;
+let currentAvatarState = 'idle';
+let currentActiveSlot = 'a'; // 'a' or 'b'
+let stateTimer = null;
+let isSpecialActionLocked = false;
+let specialActionTimer = null;
+let lastUserInteractionTime = Date.now();
+let lastPluginActionEndTime = 0;
+
+// setting.json の設定値（ホットリロード対応）
+let pluginSettings = {
+  idle_threshold_sec: 180,
+  action_interval_sec: 15,
+  default_action_duration_sec: 30,
+  touch_reaction_duration_sec: 8,
+  bubble_display_duration_sec: 30,
+  avoid_repeat_video: true
+};
+
+// quotes.json の動画別設定マップ（ホットリロード対応）
+let videoQuotesConfigMap = {};
+
+// 放置（アイドル）時のデフォルト気まぐれつぶやき（quotes.json で上書き可能）
+let defaultIdleQuotesList = [
+  "いつでも呼んでね！",
+  "今日もいい天気だね〜",
+  "お茶でも飲んで一息つこう！",
+  "何か手伝えることがあったら言ってね！"
+];
+
+// タッチ（クリック）時のリアクションつぶやき（quotes.json で上書き可能）
+let touchReactionsList = [
+  "はーい！呼んだ？",
+  "なになに〜？",
+  "ここにいるよ！",
+  "がんばろうね！",
+  "何か聞きたいことある？",
+  "えへへ、よろしくね！"
+];
+
+function applyPluginConfigs(setting, quotes) {
+  if (setting && typeof setting === 'object') {
+    if (setting.idle_threshold_sec !== undefined) {
+      pluginSettings.idle_threshold_sec = Math.max(1, Number(setting.idle_threshold_sec) || 180);
+    }
+    if (setting.action_interval_sec !== undefined) {
+      pluginSettings.action_interval_sec = Math.max(1, Number(setting.action_interval_sec) || 15);
+    }
+    if (setting.default_action_duration_sec !== undefined) {
+      pluginSettings.default_action_duration_sec = Math.max(1, Number(setting.default_action_duration_sec) || 30);
+    }
+    if (setting.touch_reaction_duration_sec !== undefined) {
+      pluginSettings.touch_reaction_duration_sec = Math.max(1, Number(setting.touch_reaction_duration_sec) || 8);
+    }
+    if (setting.bubble_display_duration_sec !== undefined) {
+      pluginSettings.bubble_display_duration_sec = Math.max(1, Number(setting.bubble_display_duration_sec) || 30);
+    }
+    if (setting.avoid_repeat_video !== undefined) {
+      pluginSettings.avoid_repeat_video = Boolean(setting.avoid_repeat_video);
+    }
+  }
+
+  if (quotes && typeof quotes === 'object') {
+    if (Array.isArray(quotes.touch_reactions) && quotes.touch_reactions.length > 0) {
+      touchReactionsList = quotes.touch_reactions;
+    }
+    if (Array.isArray(quotes.default_idle_quotes) && quotes.default_idle_quotes.length > 0) {
+      defaultIdleQuotesList = quotes.default_idle_quotes;
+    }
+    if (quotes.videos && typeof quotes.videos === 'object') {
+      videoQuotesConfigMap = quotes.videos;
+    }
+  }
+}
+
+async function refreshPluginConfigs() {
   try {
-    const dataUrl = await invoke('get_avatar_data_url', { forceRefresh });
-    if (dataUrl && dataUrl.startsWith('data:video/')) {
-      avatarVideo.src = dataUrl;
-      avatarVideo.classList.remove('hidden');
-      avatarFallback.style.display = 'none';
-      avatarVideo.play().catch(e => console.warn('Video auto-play warning:', e));
+    const res = await invoke('get_plugin_configs');
+    if (res) {
+      applyPluginConfigs(res.setting, res.quotes);
+    }
+  } catch (_) {}
+}
+
+function getVideoConfig(fileName) {
+  const stem = fileName.replace(/\.mp4$/i, '');
+  const raw = videoQuotesConfigMap[fileName] || videoQuotesConfigMap[stem];
+  const defaultDuration = pluginSettings.default_action_duration_sec || 30;
+
+  if (!raw) {
+    return {
+      enabled: true,
+      min_idle_sec: 0,
+      max_idle_sec: null,
+      time_ranges: ['00:00-23:59'],
+      duration_sec: defaultDuration,
+      weight: 1,
+      quote_probability: 1.0,
+      quotes: defaultIdleQuotesList
+    };
+  }
+
+  // 配列形式で直接セリフリストだけが書かれている場合の後方互換
+  if (Array.isArray(raw)) {
+    return {
+      enabled: true,
+      min_idle_sec: 0,
+      max_idle_sec: null,
+      time_ranges: ['00:00-23:59'],
+      duration_sec: defaultDuration,
+      weight: 1,
+      quote_probability: 1.0,
+      quotes: raw.length > 0 ? raw : defaultIdleQuotesList
+    };
+  }
+
+  return {
+    enabled: raw.enabled !== false,
+    min_idle_sec: Number(raw.min_idle_sec) || 0,
+    max_idle_sec: raw.max_idle_sec != null ? Number(raw.max_idle_sec) : null,
+    time_ranges: Array.isArray(raw.time_ranges) && raw.time_ranges.length > 0 ? raw.time_ranges : ['00:00-23:59'],
+    duration_sec: Number(raw.duration_sec) || defaultDuration,
+    weight: Math.max(0, Number(raw.weight !== undefined ? raw.weight : 1)),
+    quote_probability: raw.quote_probability !== undefined ? Number(raw.quote_probability) : 1.0,
+    quotes: Array.isArray(raw.quotes) && raw.quotes.length > 0 ? raw.quotes : defaultIdleQuotesList
+  };
+}
+
+function isWithinTimeRanges(timeRanges) {
+  if (!Array.isArray(timeRanges) || timeRanges.length === 0) return true;
+  const now = new Date();
+  const curMin = now.getHours() * 60 + now.getMinutes();
+
+  for (const rangeStr of timeRanges) {
+    if (typeof rangeStr !== 'string') continue;
+    const m = rangeStr.trim().match(/^(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})$/);
+    if (!m) continue;
+    const startMin = parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
+    const endMin = parseInt(m[3], 10) * 60 + parseInt(m[4], 10);
+    if (startMin <= endMin) {
+      if (curMin >= startMin && curMin <= endMin) return true;
+    } else {
+      // 日跨ぎ (例: "22:00-07:00")
+      if (curMin >= startMin || curMin <= endMin) return true;
+    }
+  }
+  return false;
+}
+
+function recordInteraction() {
+  lastUserInteractionTime = Date.now();
+  lastPluginActionEndTime = 0;
+}
+
+function dataUrlToBlobUrl(dataUrl) {
+  try {
+    if (!dataUrl || !dataUrl.startsWith('data:')) return dataUrl;
+    const parts = dataUrl.split(',');
+    const mimeMatch = parts[0].match(/:(.*?);/);
+    const mime = mimeMatch ? mimeMatch[1] : 'video/mp4';
+    const bstr = atob(parts[1]);
+    let n = bstr.length;
+    const u8arr = new Uint8Array(n);
+    while (n--) {
+      u8arr[n] = bstr.charCodeAt(n);
+    }
+    const blob = new Blob([u8arr], { type: mime });
+    return URL.createObjectURL(blob);
+  } catch (_) {
+    return dataUrl;
+  }
+}
+
+async function loadAvatar(forceRefresh = false) {
+  if (avatarVideoPack && !forceRefresh) {
+    return true;
+  }
+  try {
+    const pack = await invoke('get_avatar_video_pack');
+    if (pack) {
+      applyPluginConfigs(pack.setting, pack.quotes);
+    }
+
+    let idleDataUrl = pack && pack.idle ? pack.idle : '';
+    // もし avatars/idle.mp4 が未配置（git clone 直後など）の場合は、セッションWebViewから自動取得してフォールバック
+    if (!idleDataUrl) {
+      try {
+        idleDataUrl = await invoke('get_avatar_data_url', { forceRefresh });
+      } catch (_) {}
+    }
+
+    if (idleDataUrl) {
+      const idleBlobUrl = dataUrlToBlobUrl(idleDataUrl);
+      const nextPack = {
+        idle: idleBlobUrl,
+        waking: pack && pack.waking ? dataUrlToBlobUrl(pack.waking) : idleBlobUrl,
+        working: pack && pack.working ? dataUrlToBlobUrl(pack.working) : idleBlobUrl,
+        making_something: pack && pack.making_something ? dataUrlToBlobUrl(pack.making_something) : idleBlobUrl,
+        milestone_level_up: pack && pack.milestone_level_up ? dataUrlToBlobUrl(pack.milestone_level_up) : idleBlobUrl
+      };
+
+      const loadedPlugins = [];
+      if (Array.isArray(pack.plugins)) {
+        for (const item of pack.plugins) {
+          if (item && item.name && item.data_url) {
+            const stateKey = `plugin:${item.name}`;
+            nextPack[stateKey] = dataUrlToBlobUrl(item.data_url);
+            loadedPlugins.push({
+              stateKey,
+              name: item.name
+            });
+          }
+        }
+      }
+
+      avatarVideoPack = nextPack;
+      pluginItems = loadedPlugins;
+      currentAvatarState = 'idle';
+      currentActiveSlot = 'a';
+      if (avatarVideoA) {
+        avatarVideoA.src = avatarVideoPack.idle;
+        avatarVideoA.classList.add('active');
+        avatarVideoA.classList.remove('hidden');
+        avatarVideoA.play().catch(() => {});
+      }
+      if (avatarVideoB) {
+        avatarVideoB.classList.remove('active');
+      }
+      if (avatarFallback) avatarFallback.style.display = 'none';
       return true;
     }
   } catch (err) {
     console.warn('loadAvatar error:', err);
   }
-  // 取得できなかった場合はフォールバック表示
-  avatarVideo.classList.add('hidden');
-  avatarFallback.style.display = 'flex';
+  if (avatarFallback) avatarFallback.style.display = 'flex';
   return false;
+}
+
+function setAvatarState(targetState, options = {}) {
+  const { durationMs = 0, force = false, lockDuration = false } = options;
+  if (!avatarVideoPack) return;
+  const newSrc = avatarVideoPack[targetState];
+  if (!newSrc) return;
+
+  // 特殊アクション（タッチや3分放置アクション）ロック中は、強制指定以外の上書きを抑制
+  if (isSpecialActionLocked && !force) {
+    return;
+  }
+
+  // ロック時間の更新
+  if (lockDuration && durationMs > 0) {
+    isSpecialActionLocked = true;
+    if (specialActionTimer) clearTimeout(specialActionTimer);
+    specialActionTimer = setTimeout(() => {
+      isSpecialActionLocked = false;
+      specialActionTimer = null;
+    }, durationMs);
+  } else if (force && !lockDuration) {
+    isSpecialActionLocked = false;
+    if (specialActionTimer) {
+      clearTimeout(specialActionTimer);
+      specialActionTimer = null;
+    }
+  }
+
+  // 自動復帰タイマーの更新
+  if (stateTimer) {
+    clearTimeout(stateTimer);
+    stateTimer = null;
+  }
+  if (durationMs > 0 && targetState !== 'idle') {
+    stateTimer = setTimeout(() => {
+      isSpecialActionLocked = false;
+      if (specialActionTimer) {
+        clearTimeout(specialActionTimer);
+        specialActionTimer = null;
+      }
+      lastPluginActionEndTime = Date.now();
+      setAvatarState('idle', { force: true });
+    }, durationMs);
+  }
+
+  // すでに同じステートの動画を再生中の場合は、絶対に <video> スロット切替・再読込を行わない（ちらつき防止）
+  if (currentAvatarState === targetState) {
+    return;
+  }
+
+  currentAvatarState = targetState;
+
+  // スロットの切り替え（A <-> B）で 500ms クロスフェード
+  const incomingSlot = currentActiveSlot === 'a' ? avatarVideoB : avatarVideoA;
+  const outgoingSlot = currentActiveSlot === 'a' ? avatarVideoA : avatarVideoB;
+
+  if (incomingSlot) {
+    if (incomingSlot.src !== newSrc) {
+      incomingSlot.src = newSrc;
+    }
+    incomingSlot.classList.remove('hidden');
+    const onPlayReady = () => {
+      incomingSlot.classList.add('active');
+      if (outgoingSlot) {
+        outgoingSlot.classList.remove('active');
+      }
+      currentActiveSlot = currentActiveSlot === 'a' ? 'b' : 'a';
+    };
+
+    incomingSlot.play().then(onPlayReady).catch(() => {
+      onPlayReady();
+    });
+  }
+}
+
+// 放置時間・時間帯に応じた「気まぐれアクション（plugin フォルダ内動画の条件付きランダムピックアップ）」
+function checkIdleAction() {
+  if (currentAvatarState !== 'idle' || isSpecialActionLocked) {
+    return;
+  }
+
+  const now = Date.now();
+  const totalInactiveSec = (now - lastUserInteractionTime) / 1000;
+  const thresholdSec = Math.max(1, Number(pluginSettings.idle_threshold_sec) || 15);
+
+  // まだ IDLE 突入時間（idle_threshold_sec）に達していない場合は何もしない
+  if (totalInactiveSec < thresholdSec) {
+    return;
+  }
+
+  // 前回のプラグイン動画再生終了から action_interval_sec 秒経過しているか確認
+  if (lastPluginActionEndTime > 0) {
+    const sinceLastEndSec = (now - lastPluginActionEndTime) / 1000;
+    const intervalSec = Math.max(1, Number(pluginSettings.action_interval_sec) || thresholdSec);
+    if (sinceLastEndSec < intervalSec) {
+      return;
+    }
+  }
+
+  // IDLE に入ってからの経過時間（秒）
+  const idleElapsedSec = Math.max(0, totalInactiveSec - thresholdSec);
+
+  if (pluginItems.length > 0) {
+    // 1. quotes.json の動画別条件（enabled, min_idle_sec, max_idle_sec, time_ranges, weight）でフィルタリング
+    let eligible = pluginItems
+      .map(item => ({ item, cfg: getVideoConfig(item.name) }))
+      .filter(({ cfg }) => {
+        if (!cfg.enabled || cfg.weight <= 0) return false;
+        if (idleElapsedSec < cfg.min_idle_sec) return false;
+        if (cfg.max_idle_sec !== null && idleElapsedSec > cfg.max_idle_sec) return false;
+        if (!isWithinTimeRanges(cfg.time_ranges)) return false;
+        return true;
+      });
+
+    if (eligible.length === 0) {
+      return;
+    }
+
+    // 2. 連続再生回避設定（avoid_repeat_video）が true で候補が 2 件以上ある場合は前回動画を除外
+    if (pluginSettings.avoid_repeat_video && eligible.length > 1 && lastPickedPluginKey) {
+      eligible = eligible.filter(e => e.item.stateKey !== lastPickedPluginKey);
+    }
+
+    // 3. weight（重み）に基づくランダム抽選
+    const totalWeight = eligible.reduce((sum, e) => sum + e.cfg.weight, 0);
+    let r = Math.random() * totalWeight;
+    let selected = eligible[eligible.length - 1];
+    for (const entry of eligible) {
+      r -= entry.cfg.weight;
+      if (r <= 0) {
+        selected = entry;
+        break;
+      }
+    }
+
+    lastPickedPluginKey = selected.item.stateKey;
+    const durationMs = Math.max(1, selected.cfg.duration_sec) * 1000;
+
+    setAvatarState(selected.item.stateKey, { durationMs, lockDuration: true, force: true });
+
+    // 4. セリフ表示（quote_probability に応じて表示）
+    if (document.body.classList.contains('mode-mascot') && Math.random() <= selected.cfg.quote_probability) {
+      const pool = selected.cfg.quotes;
+      if (pool && pool.length > 0) {
+        const quote = pool[Math.floor(Math.random() * pool.length)];
+        playLupinTyping(quote);
+      }
+    }
+  } else {
+    const durationMs = Math.max(1, pluginSettings.default_action_duration_sec || 30) * 1000;
+    const randomAction = Math.random() < 0.5 ? 'waking' : 'working';
+    setAvatarState(randomAction, { durationMs, lockDuration: true, force: true });
+    if (document.body.classList.contains('mode-mascot') && defaultIdleQuotesList.length > 0) {
+      const quote = defaultIdleQuotesList[Math.floor(Math.random() * defaultIdleQuotesList.length)];
+      playLupinTyping(quote);
+    }
+  }
+}
+
+// Muse 本体のリアルタイム動作状態同期
+async function syncAvatarStateWithMuse() {
+  try {
+    const res = await invoke('get_avatar_state');
+    if (res && res.state) {
+      if (res.state === 'working' || res.state === 'making_something' || res.state === 'waking') {
+        recordInteraction();
+        setAvatarState(res.state, { force: true });
+      } else if (res.state === 'milestone_level_up') {
+        recordInteraction();
+        setAvatarState('milestone_level_up', { durationMs: 6000, lockDuration: true, force: true });
+      } else if (res.state === 'idle') {
+        // タッチリアクション中や3分放置アクション中は idle で上書きしない
+        if (!isSpecialActionLocked) {
+          if (currentAvatarState === 'working' || currentAvatarState === 'making_something') {
+            // Muse本体の作業が完了して idle に戻った直後は 5 秒間歓喜ポーズを表示してから idle へ
+            setAvatarState('milestone_level_up', { durationMs: 5000, lockDuration: true, force: true });
+          } else if (currentAvatarState !== 'idle') {
+            setAvatarState('idle');
+          }
+        }
+      }
+    }
+  } catch (_) {}
 }
 
 // ==========================================
@@ -237,7 +646,7 @@ async function loadChatMessages() {
     const messages = await invoke('get_chat_messages', { limit: currentLimit });
     renderMessages(messages);
 
-    // 新着アシスタントメッセージの検知
+    // 新着アシスタントメッセージの検知 & 会話連動のアバター状態同期
     if (messages && messages.length > 0) {
       const assistantMsgs = messages.filter(m => m.role === 'assistant');
       const latestAssistant = assistantMsgs.length > 0 ? assistantMsgs[assistantMsgs.length - 1].text : null;
@@ -246,8 +655,9 @@ async function loadChatMessages() {
           lastSeenAssistantText = latestAssistant;
         } else if (latestAssistant !== lastSeenAssistantText) {
           lastSeenAssistantText = latestAssistant;
-          // 新着メッセージ受信時はMuse本体の動画（発話・表情）も更新されている可能性があるため再同期
-          setTimeout(() => loadAvatar(true).catch(() => {}), 600);
+          recordInteraction();
+          // 新着メッセージが届いた瞬間 -> 歓喜・レベルアップポーズ（6秒間）
+          setAvatarState('milestone_level_up', { durationMs: 6000, force: true, lockDuration: true });
           if (document.body.classList.contains('mode-mascot')) {
             playLupinTyping(latestAssistant);
           }
@@ -316,6 +726,8 @@ async function handleSendMessage() {
 
   chatInput.disabled = true;
   btnSendMessage.disabled = true;
+  recordInteraction();
+  setAvatarState('working');
 
   try {
     // 直前の自分メッセージを即時反映（楽観的UI）
@@ -426,7 +838,8 @@ async function enterMascotMode() {
   try {
     const newMode = await invoke('enter_mascot_mode');
     applySizeMode(newMode);
-    // ※最小化移行時の自動発話は廃止（新着メッセージ時のみ通知）
+    recordInteraction();
+    setAvatarState('waking', { durationMs: 3500 });
   } catch (err) {
     console.error('enterMascotMode error:', err);
   }
@@ -475,18 +888,56 @@ window.addEventListener('DOMContentLoaded', async () => {
     invoke('drag_window').catch(console.error);
   });
 
-  // マスコットモード時のアバタードラッグ
-  if (avatarColumn) {
-    avatarColumn.addEventListener('mousedown', (e) => {
-      if (e.target.closest('#mascot-restore-btn') || e.target.closest('#btn-fetch-avatar') || e.target.closest('#mascot-bubble')) return;
+  // マスコットモード時のアバタードラッグ＆クリック分離制御
+  let isPointerDownOnAvatar = false;
+  let isDraggingAvatar = false;
+  let avatarDownX = 0;
+  let avatarDownY = 0;
+
+  // ネームプレート（ラッキー）は即時ドラッグ
+  if (avatarNameEl) {
+    avatarNameEl.addEventListener('mousedown', (e) => {
       if (document.body.classList.contains('mode-mascot')) {
         invoke('drag_window').catch(console.error);
       }
     });
   }
 
-  // ドラッグ終了時に位置保存＆吹き出し向きの更新
+  // アバター本体（avatarContainer）: 押下開始
+  avatarContainer.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return;
+    if (e.target.closest('#mascot-restore-btn') || e.target.closest('#btn-fetch-avatar')) return;
+    isPointerDownOnAvatar = true;
+    isDraggingAvatar = false;
+    avatarDownX = e.screenX;
+    avatarDownY = e.screenY;
+  });
+
+  window.addEventListener('mousemove', (e) => {
+    if (!isPointerDownOnAvatar || isDraggingAvatar) return;
+    const dx = e.screenX - avatarDownX;
+    const dy = e.screenY - avatarDownY;
+    if (Math.hypot(dx, dy) > 6) {
+      isDraggingAvatar = true;
+      if (document.body.classList.contains('mode-mascot')) {
+        invoke('drag_window').catch(console.error);
+      }
+    }
+  });
+
+  // ドラッグ終了またはクリック判定
   window.addEventListener('mouseup', () => {
+    if (isPointerDownOnAvatar) {
+      const wasDragging = isDraggingAvatar;
+      isPointerDownOnAvatar = false;
+      isDraggingAvatar = false;
+
+      // 6px 未満の移動で離した場合はクリックとして実行
+      if (!wasDragging) {
+        handleAvatarClickAction();
+      }
+    }
+
     if (document.body.classList.contains('mode-mascot')) {
       updateMascotBubbleDirection();
       invoke('save_current_window_position').catch(() => {});
@@ -542,16 +993,38 @@ window.addEventListener('DOMContentLoaded', async () => {
     await loadUsageLimit(true);
   });
 
-  // アバタークリック（通常時: 再取得 / マスコット時: 通常画面へ復元、右クリックで吹き出し再生）
-  avatarContainer.addEventListener('click', () => {
-    if (document.body.classList.contains('mode-mascot')) {
-      restoreFromMascot();
-    } else {
-      loadAvatar(true);
+  // アバタークリック制御（シングルクリック: つついて喜ぶリアクション / ダブルクリック: 画面復元）
+  let avatarClickTimer = null;
+  let avatarClickCount = 0;
+
+  function handleAvatarClickAction() {
+    recordInteraction();
+    avatarClickCount++;
+    if (avatarClickCount === 1) {
+      avatarClickTimer = setTimeout(() => {
+        avatarClickCount = 0;
+        // シングルクリック: つついて反応（setting.json の touch_reaction_duration_sec 秒間維持 + つぶやき）
+        const touchDurationMs = Math.max(1, Number(pluginSettings.touch_reaction_duration_sec) || 8) * 1000;
+        setAvatarState('milestone_level_up', { durationMs: touchDurationMs, lockDuration: true, force: true });
+        if (document.body.classList.contains('mode-mascot') && touchReactionsList.length > 0) {
+          const reaction = touchReactionsList[Math.floor(Math.random() * touchReactionsList.length)];
+          playLupinTyping(reaction);
+        }
+      }, 260);
+    } else if (avatarClickCount >= 2) {
+      clearTimeout(avatarClickTimer);
+      avatarClickCount = 0;
+      // ダブルクリック: 通常画面（またはセッション）へ復元
+      if (document.body.classList.contains('mode-mascot')) {
+        restoreFromMascot();
+      } else {
+        openOrShowSession();
+      }
     }
-  });
+  }
 
   avatarContainer.addEventListener('contextmenu', (e) => {
+    recordInteraction();
     if (document.body.classList.contains('mode-mascot')) {
       e.preventDefault();
       if (lastSeenAssistantText) {
@@ -622,14 +1095,19 @@ window.addEventListener('DOMContentLoaded', async () => {
   setTimeout(() => syncAllSequential(false), 4000);
   setTimeout(() => syncAllSequential(false), 7000);
 
+  // 3秒ごとのリアルタイム動作状態・チャット同期 ＆ 設定ホットリロード・放置監視
+  setInterval(async () => {
+    await refreshPluginConfigs();
+    await syncAvatarStateWithMuse();
+    await loadChatMessages();
+    checkIdleAction();
+  }, 3000);
+
   // 12 秒ごとの自動バックグラウンド同期（チャット＆ヘルスチェック）
   setInterval(async () => {
     await updateSessionStatus();
     await runHealthCheck();
     await loadChatMessages();
-    if (avatarVideo.classList.contains('hidden')) {
-      await loadAvatar(false);
-    }
   }, 12000);
 
   // §16 10 分ごとの利用枠定期自動取得（ガードレール①: セッション画面が非表示のときのみ実行）

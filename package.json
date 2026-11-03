@@ -1,7 +1,7 @@
 {
   "name": "muse-desktop-mascot",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.9.0",
   "description": "Windows Desktop Gadget for Muse AI",
   "type": "module",
   "scripts": {

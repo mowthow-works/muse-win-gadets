@@ -186,7 +186,211 @@ window.__MUSE_BRIDGE__ = {
   },
 
   /**
-   * §17.3 起動時・定期ヘルスチェック (R1 / R2 / R3 / R5 のセレクタ生存確認 + アバター名取得)
+   * アバター状態（State）のリアルタイム判定 (Issue #10)
+   * Muse本体のアバターコンポーネントのステータスおよび再生中の動画Blobサイズから直接一致させる
+   */
+  async getAvatarState() {
+    try {
+      window.__MUSE_BLOB_STATE_MAP__ = window.__MUSE_BLOB_STATE_MAP__ || {};
+
+      const v =
+        document.querySelector('video[data-hatch-media-owner="avatar-layer"][data-hatch-avatar-slot="current"]') ||
+        document.querySelector('video[data-hatch-media-owner="avatar-layer"]') ||
+        queryFirst(SELECTORS.avatarVideo).el;
+
+      // 1. React Fiber / Props に明示的なステータス値がある場合は最優先で取得
+      const validStates = new Set([
+        'idle',
+        'connecting',
+        'waking',
+        'working',
+        'waiting_for_subagent',
+        'making_something',
+        'milestone_level_up'
+      ]);
+
+      const normalizeState = (raw) => {
+        if (!raw || typeof raw !== 'string') return null;
+        const s = raw.trim().toLowerCase();
+        if (!validStates.has(s)) return null;
+        if (s === 'connecting') return 'idle';
+        if (s === 'waiting_for_subagent') return 'working';
+        return s;
+      };
+
+      let fiberState = null;
+      let curr = v;
+      for (let depth = 0; depth < 8 && curr && !fiberState; depth++) {
+        const keys = Object.keys(curr);
+        for (const k of keys) {
+          if (k.startsWith('__reactProps$') || k.startsWith('__reactFiber$')) {
+            const obj = curr[k];
+            const props = obj?.memoizedProps || obj?.pendingProps || obj;
+            if (props && typeof props === 'object') {
+              for (const pk of ['state', 'status', 'avatarState', 'avatarStatus', 'mode', 'phase', 'animation']) {
+                const mapped = normalizeState(props[pk]);
+                if (mapped) {
+                  fiberState = mapped;
+                  break;
+                }
+              }
+            }
+          }
+        }
+        curr = curr.parentElement;
+      }
+
+      // 2. ご指定のXPathおよびアバター下のステータステキスト（「リンク済み」など）の取得
+      const STATUS_XPATH = '/html/body/div[2]/div/div/div/div/div[1]/div/div[2]/div[1]/div/div[2]/div/div[2]/div[2]/div[1]/div/div/div/div[3]/div/div/div/div/div';
+      let statusEl = null;
+      try {
+        statusEl = document.evaluate(
+          STATUS_XPATH,
+          document,
+          null,
+          XPathResult.FIRST_ORDERED_NODE_TYPE,
+          null
+        ).singleNodeValue;
+      } catch (_) {}
+
+      let statusText = statusEl ? (statusEl.innerText || statusEl.textContent || '').trim() : '';
+
+      // statusEl 自身の React Fiber / Props も探索
+      if (statusEl && !fiberState) {
+        let sc = statusEl;
+        for (let depth = 0; depth < 6 && sc && !fiberState; depth++) {
+          const keys = Object.keys(sc);
+          for (const k of keys) {
+            if (k.startsWith('__reactProps$') || k.startsWith('__reactFiber$')) {
+              const obj = sc[k];
+              const props = obj?.memoizedProps || obj?.pendingProps || obj;
+              if (props && typeof props === 'object') {
+                for (const pk of ['state', 'status', 'avatarState', 'avatarStatus', 'mode', 'phase', 'animation']) {
+                  const mapped = normalizeState(props[pk]);
+                  if (mapped) {
+                    fiberState = mapped;
+                    break;
+                  }
+                }
+              }
+            }
+          }
+          sc = sc.parentElement;
+        }
+      }
+
+      // XPath で空だった場合のフォールバック（アバター親要素から取得）
+      if (!statusText && v) {
+        let p = v.parentElement;
+        for (let d = 0; d < 6 && p; d++) {
+          const lines = (p.innerText || '')
+            .split(/\n+/)
+            .map(s => s.trim())
+            .filter(s => s.length > 0 && s.length <= 24);
+          if (lines.length >= 2) {
+            statusText = lines[lines.length - 1];
+            break;
+          }
+          p = p.parentElement;
+        }
+      }
+
+      if (fiberState) {
+        return { state: fiberState, statusText, source: 'fiber' };
+      }
+
+      // 3. ステータステキストが明確に「リンク済み」等の待機状態であれば idle、稼働中テキストであれば対応状態を判定
+      const mapStatusTextToState = (txt) => {
+        if (!txt) return null;
+        const t = txt.trim();
+        const lower = t.toLowerCase();
+        if (validStates.has(lower)) {
+          return normalizeState(lower);
+        }
+        if (t === 'リンク済み' || t === 'オンライン' || t === '待機中' || /接続|linked|online|idle|ready|connected/i.test(t)) {
+          return 'idle';
+        }
+        if (/起動|目覚め|waking/i.test(t)) {
+          return 'waking';
+        }
+        if (/歓喜|レベルアップ|達成|milestone|level.?up/i.test(t)) {
+          return 'milestone_level_up';
+        }
+        if (/作成|生成|構築|描画|コード|ファイル|making|creating|building|generating/i.test(t)) {
+          return 'making_something';
+        }
+        if (/作業|考え|思考|返信|検索|調査|確認|サブエージェント|待機|実行|working|thinking|searching|waiting|running/i.test(t)) {
+          return 'working';
+        }
+        // 「リンク済み」以外のステータステキストが表示されている場合は作業中とみなす
+        return 'working';
+      };
+
+      const textMappedState = mapStatusTextToState(statusText);
+
+      // 4. 再生中の <video src="blob:..."> のバイトサイズから 5 種類の MP4 を 100% 特定
+      //    - waking.mp4:             262,753 bytes
+      //    - working.mp4:            369,723 bytes
+      //    - making_something.mp4:   406,030 bytes
+      //    - idle.mp4:               564,061 bytes
+      //    - milestone_level_up.mp4: 595,491 bytes
+      const currentBlob = v ? (v.currentSrc || v.src || '') : '';
+      if (currentBlob && currentBlob.startsWith('blob:')) {
+        if (!window.__MUSE_BLOB_STATE_MAP__[currentBlob]) {
+          try {
+            const resp = await fetch(currentBlob);
+            if (resp.ok) {
+              const blob = await resp.blob();
+              const size = blob.size;
+              let detected = 'idle';
+              if (size > 0 && size < 310000) {
+                detected = 'waking';
+              } else if (size >= 310000 && size < 390000) {
+                detected = 'working';
+              } else if (size >= 390000 && size < 480000) {
+                detected = 'making_something';
+              } else if (size >= 480000 && size < 580000) {
+                detected = 'idle';
+              } else if (size >= 580000) {
+                detected = 'milestone_level_up';
+              }
+              window.__MUSE_BLOB_STATE_MAP__[currentBlob] = { state: detected, size };
+            }
+          } catch (_) {}
+        }
+
+        const cached = window.__MUSE_BLOB_STATE_MAP__[currentBlob];
+        if (cached && cached.state) {
+          // もし動画Blobが idle であっても、ステータステキストが明確に稼働中（「リンク済み」以外）を示していればステータス表示を優先
+          if (cached.state === 'idle' && textMappedState && textMappedState !== 'idle') {
+            return {
+              state: textMappedState,
+              blobSize: cached.size,
+              statusText,
+              source: 'xpath_status_override'
+            };
+          }
+          return {
+            state: cached.state,
+            blobSize: cached.size,
+            statusText,
+            source: 'blob_size'
+          };
+        }
+      }
+
+      if (textMappedState) {
+        return { state: textMappedState, statusText, source: 'xpath_status' };
+      }
+
+      return { state: 'idle', statusText, source: 'default' };
+    } catch (_) {
+      return { state: 'idle', source: 'error' };
+    }
+  },
+
+  /**
+   * §17.3 起動時・定期ヘルスチェック (R1 / R2 / R3 / R5 のセレクタ生存確認 + アバター名取得 + アバター状態)
    */
   async checkHealth() {
     const vFound = queryFirst(SELECTORS.avatarVideo);
@@ -194,9 +398,11 @@ window.__MUSE_BRIDGE__ = {
     const iFound = queryFirst(SELECTORS.chatInput);
     const sFound = queryFirst(SELECTORS.settingsButton);
     const avatarName = this.extractAvatarName();
+    const avatarStateInfo = await this.getAvatarState();
 
     return {
       avatar_name: avatarName,
+      avatar_state: avatarStateInfo.state,
       avatar_src: vFound.el ? (vFound.el.currentSrc || vFound.el.src || '') : '',
       r1_avatar: {
         ok: !!(vFound.el && (vFound.el.currentSrc || vFound.el.src)),
@@ -291,6 +497,108 @@ window.__MUSE_BRIDGE__ = {
 
     const parsedLimit = Number(limit) || 5;
     return messages.slice(-parsedLimit);
+  },
+
+  /**
+   * 2.1 最新メッセージおよび動画・リンク詳細の調査 (Issue #10)
+   */
+  async inspectLatestMessage() {
+    const { list: messageEls } = queryAllFirst(SELECTORS.messageItems);
+    if (messageEls.length === 0) {
+      return { error: "No messages found" };
+    }
+
+    // 全メッセージから動画や素材関連の要素も横断探索
+    const targetMsg = messageEls[messageEls.length - 1];
+    
+    // 素材関連のキーワードを含むメッセージがあればそれも特定
+    const materialMsg = messageEls.slice().reverse().find(m => {
+      const t = m.innerText || '';
+      return t.includes('素材') || t.includes('7パターン') || t.includes('MP4') || t.includes('idle');
+    }) || targetMsg;
+
+    function extractMedia(el) {
+      if (!el) return {};
+      const links = Array.from(el.querySelectorAll('a')).map(a => ({
+        href: a.href,
+        text: (a.textContent || '').trim(),
+        download: a.getAttribute('download') || '',
+        title: a.title || ''
+      }));
+
+      const videos = Array.from(el.querySelectorAll('video')).map(v => ({
+        src: v.src || '',
+        currentSrc: v.currentSrc || '',
+        poster: v.poster || ''
+      }));
+
+      const images = Array.from(el.querySelectorAll('img')).map(img => ({
+        src: img.src || '',
+        alt: img.alt || ''
+      }));
+
+      const buttons = Array.from(el.querySelectorAll('button')).map(b => ({
+        ariaLabel: b.getAttribute('aria-label') || '',
+        text: (b.textContent || '').trim(),
+        title: b.title || '',
+        className: b.className || ''
+      }));
+
+      // カード・コンテナ要素
+      const cards = Array.from(el.querySelectorAll('[class*="card"], [class*="media"], [class*="asset"], [data-testid]')).map(c => ({
+        tag: c.tagName,
+        className: c.className || '',
+        dataTestId: c.getAttribute('data-testid') || '',
+        text: (c.textContent || '').slice(0, 50)
+      }));
+
+      return { links, videos, images, buttons, cards };
+    }
+
+    const latestMedia = extractMedia(targetMsg);
+    const materialMedia = extractMedia(materialMsg);
+
+    // アバター要素およびその親コンテナの属性詳細
+    const v = document.querySelector('video[data-hatch-media-owner="avatar-layer"]') || document.querySelector('video');
+    const avatarDomInfo = v ? {
+      src: v.src,
+      currentSrc: v.currentSrc,
+      attrs: Array.from(v.attributes).map(a => `${a.name}="${a.value}"`),
+      parentAttrs: v.parentElement ? Array.from(v.parentElement.attributes).map(a => `${a.name}="${a.value}"`) : [],
+      gpAttrs: v.parentElement?.parentElement ? Array.from(v.parentElement.parentElement.attributes).map(a => `${a.name}="${a.value}"`) : []
+    } : null;
+
+    // 画面内のボタン一覧（送信ボタンや停止ボタンの特定用）
+    const allButtons = Array.from(document.querySelectorAll('button')).map(b => ({
+      ariaLabel: b.getAttribute('aria-label') || '',
+      type: b.type || '',
+      text: (b.textContent || '').trim().slice(0, 30),
+      disabled: b.disabled,
+      cls: (b.className || '').slice(0, 40)
+    })).filter(b => b.ariaLabel || b.text || b.cls.includes('send') || b.cls.includes('submit'));
+
+    const recent = messageEls.slice(-5).map(m => {
+      const sr = m.querySelector('.sr-only');
+      const role = sr && (sr.textContent || '').includes('自分') ? 'user' : 'assistant';
+      return {
+        role,
+        text: (m.innerText || '').trim()
+      };
+    });
+
+    return {
+      avatarDomInfo,
+      allButtons,
+      latest: {
+        text: (targetMsg.innerText || '').trim(),
+        media: latestMedia
+      },
+      materialMessage: {
+        text: (materialMsg.innerText || '').trim(),
+        media: materialMedia
+      },
+      recent
+    };
   },
 
   /**
@@ -474,8 +782,14 @@ window.__MUSE_BRIDGE__ = {
         case 'get_avatar':
           result = await this.getAvatarVideoBase64();
           break;
+        case 'get_avatar_state':
+          result = await this.getAvatarState();
+          break;
         case 'get_messages':
           result = await this.getMessages(args?.limit);
+          break;
+        case 'inspect_latest':
+          result = await this.inspectLatestMessage();
           break;
         case 'send_message':
           result = await this.sendMessage(args?.text);

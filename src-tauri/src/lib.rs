@@ -10,6 +10,34 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::{AppHandle, LogicalSize, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 use tauri_plugin_opener::OpenerExt;
+use base64::prelude::*;
+
+const EMBEDDED_SETTING_JSON: &str = include_str!("../assets/avatars/setting.json");
+const EMBEDDED_QUOTES_JSON: &str = include_str!("../assets/avatars/plugin/quotes.json");
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct PluginVideoItem {
+    pub name: String,
+    pub data_url: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct PluginConfigsPayload {
+    pub setting: serde_json::Value,
+    pub quotes: serde_json::Value,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct AvatarVideoPack {
+    pub idle: String,
+    pub waking: String,
+    pub working: String,
+    pub making_something: String,
+    pub milestone_level_up: String,
+    pub plugins: Vec<PluginVideoItem>,
+    pub setting: serde_json::Value,
+    pub quotes: serde_json::Value,
+}
 
 static NONCE_COUNTER: AtomicU64 = AtomicU64::new(1);
 static CURRENT_DOC_TITLE: OnceLock<Mutex<String>> = OnceLock::new();
@@ -357,6 +385,174 @@ async fn run_bridge_action(
 // Tauri コマンド群
 // ==========================================
 
+fn collect_avatar_dirs(app: &AppHandle) -> Vec<PathBuf> {
+    let mut avatar_dirs: Vec<PathBuf> = Vec::new();
+
+    // 1. プロジェクト内の src-tauri/assets/avatars (開発・ローカル差し替え最優先)
+    let manifest_avatars = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("assets")
+        .join("avatars");
+    if manifest_avatars.exists() {
+        avatar_dirs.push(manifest_avatars);
+    }
+
+    // 2. 実行ファイルと同じ階層の avatars フォルダ (ポータブル配布対応)
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            let exe_avatars = exe_dir.join("avatars");
+            if exe_avatars.exists() {
+                avatar_dirs.push(exe_avatars);
+            }
+        }
+    }
+
+    // 3. %LOCALAPPDATA%\works.mowthow.muse.gadgets\avatars
+    if let Ok(local_dir) = app.path().app_local_data_dir() {
+        let appdata_avatars = local_dir.join("avatars");
+        if appdata_avatars.exists() {
+            avatar_dirs.push(appdata_avatars);
+        }
+    }
+
+    avatar_dirs
+}
+
+fn load_plugin_configs_internal(app: &AppHandle) -> PluginConfigsPayload {
+    let avatar_dirs = collect_avatar_dirs(app);
+    let mut setting_val: serde_json::Value =
+        serde_json::from_str(EMBEDDED_SETTING_JSON).unwrap_or_else(|_| serde_json::json!({}));
+    let mut quotes_val: serde_json::Value =
+        serde_json::from_str(EMBEDDED_QUOTES_JSON).unwrap_or_else(|_| serde_json::json!({}));
+
+    let plugin_dir_opt = avatar_dirs
+        .iter()
+        .map(|d| d.join("plugin"))
+        .find(|p| p.exists() && p.is_dir());
+
+    // setting.json の探索 (avatars/setting.json -> plugin/setting.json -> プロジェクトルート/setting.json)
+    let mut setting_candidates: Vec<PathBuf> = Vec::new();
+    for d in &avatar_dirs {
+        setting_candidates.push(d.join("setting.json"));
+    }
+    if let Some(ref pdir) = plugin_dir_opt {
+        setting_candidates.push(pdir.join("setting.json"));
+    }
+    if let Some(proj_root) = PathBuf::from(env!("CARGO_MANIFEST_DIR")).parent() {
+        setting_candidates.push(proj_root.join("setting.json"));
+    }
+
+    for sp in setting_candidates {
+        if sp.exists() {
+            if let Ok(txt) = fs::read_to_string(&sp) {
+                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&txt) {
+                    setting_val = parsed;
+                    break;
+                }
+            }
+        }
+    }
+
+    // quotes.json の探索
+    if let Some(ref pdir) = plugin_dir_opt {
+        let quotes_path = pdir.join("quotes.json");
+        if quotes_path.exists() {
+            if let Ok(txt) = fs::read_to_string(&quotes_path) {
+                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&txt) {
+                    quotes_val = parsed;
+                }
+            }
+        }
+    }
+
+    PluginConfigsPayload {
+        setting: setting_val,
+        quotes: quotes_val,
+    }
+}
+
+#[tauri::command]
+fn get_plugin_configs(app: AppHandle) -> Result<PluginConfigsPayload, String> {
+    Ok(load_plugin_configs_internal(&app))
+}
+
+#[tauri::command]
+fn get_avatar_video_pack(app: AppHandle) -> Result<AvatarVideoPack, String> {
+    let avatar_dirs = collect_avatar_dirs(&app);
+
+    let load_one_opt = |name: &str| -> Option<String> {
+        for dir in &avatar_dirs {
+            let file_path = dir.join(name);
+            if file_path.exists() {
+                if let Ok(bytes) = fs::read(&file_path) {
+                    if !bytes.is_empty() {
+                        return Some(format!("data:video/mp4;base64,{}", BASE64_STANDARD.encode(&bytes)));
+                    }
+                }
+            }
+        }
+        None
+    };
+
+    let idle = load_one_opt("idle.mp4").unwrap_or_default();
+    let waking = load_one_opt("waking.mp4").unwrap_or_else(|| idle.clone());
+    let working = load_one_opt("working.mp4").unwrap_or_else(|| idle.clone());
+    let making_something = load_one_opt("making_something.mp4").unwrap_or_else(|| working.clone());
+    let milestone_level_up = load_one_opt("milestone_level_up.mp4").unwrap_or_else(|| idle.clone());
+
+    let configs = load_plugin_configs_internal(&app);
+    let mut plugins: Vec<PluginVideoItem> = Vec::new();
+
+    let plugin_dir_opt = avatar_dirs
+        .iter()
+        .map(|d| d.join("plugin"))
+        .find(|p| p.exists() && p.is_dir());
+
+    if let Some(plugin_dir) = plugin_dir_opt {
+        if let Ok(entries) = fs::read_dir(&plugin_dir) {
+            let mut mp4_paths: Vec<PathBuf> = entries
+                .filter_map(|e| e.ok().map(|de| de.path()))
+                .filter(|p| {
+                    p.is_file()
+                        && p.extension()
+                            .and_then(|ext| ext.to_str())
+                            .map(|ext| ext.eq_ignore_ascii_case("mp4"))
+                            .unwrap_or(false)
+                })
+                .collect();
+            mp4_paths.sort();
+
+            for path in mp4_paths {
+                let Some(file_name) = path.file_name().and_then(|n| n.to_str()).map(|s| s.to_string()) else {
+                    continue;
+                };
+
+                if let Ok(bytes) = fs::read(&path) {
+                    if !bytes.is_empty() {
+                        let data_url =
+                            format!("data:video/mp4;base64,{}", BASE64_STANDARD.encode(&bytes));
+
+                        plugins.push(PluginVideoItem {
+                            name: file_name,
+                            data_url,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(AvatarVideoPack {
+        idle,
+        waking,
+        working,
+        making_something,
+        milestone_level_up,
+        plugins,
+        setting: configs.setting,
+        quotes: configs.quotes,
+    })
+}
+
 #[tauri::command]
 async fn get_avatar_data_url(
     app: AppHandle,
@@ -408,6 +604,28 @@ async fn get_chat_messages(
     let messages: Vec<ChatMessage> = serde_json::from_value(res)
         .map_err(|e| format!("Failed to parse chat messages: {}", e))?;
     Ok(messages)
+}
+
+#[tauri::command]
+async fn inspect_latest_message(app: AppHandle) -> Result<serde_json::Value, String> {
+    let session = ensure_session_window(&app)?;
+    let res = run_bridge_action(&session, "inspect_latest", &serde_json::json!({}), 20000).await;
+    match res {
+        Ok(val) => {
+            if let Ok(dir) = app.path().app_local_data_dir() {
+                let dump_path = dir.join("latest_inspect.json");
+                let _ = fs::write(&dump_path, serde_json::to_string_pretty(&val).unwrap_or_default());
+            }
+            Ok(val)
+        }
+        Err(e) => {
+            if let Ok(dir) = app.path().app_local_data_dir() {
+                let dump_path = dir.join("latest_inspect_error.txt");
+                let _ = fs::write(&dump_path, format!("inspect_latest error: {}", e));
+            }
+            Err(e)
+        }
+    }
 }
 
 #[tauri::command]
@@ -515,6 +733,12 @@ async fn get_usage_limit(
     }
 
     Ok(info)
+}
+
+#[tauri::command]
+async fn get_avatar_state(app: AppHandle) -> Result<serde_json::Value, String> {
+    let session = ensure_session_window(&app)?;
+    run_bridge_action(&session, "get_avatar_state", &serde_json::json!({}), 4000).await
 }
 
 #[tauri::command]
@@ -834,8 +1058,8 @@ fn minimize_window(window: tauri::Window) {
 }
 
 #[tauri::command]
-fn close_window(window: tauri::Window) {
-    let _ = window.close();
+fn close_window(app: AppHandle) {
+    app.exit(0);
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -849,6 +1073,7 @@ pub fn run() {
             // システムトレイの初期化
             let toggle_app = MenuItem::with_id(handle, "toggle_app", "セッション画面 ⇄ マスコット (Ctrl+Shift+M)", true, None::<&str>)?;
             let open_session = MenuItem::with_id(handle, "open_session", "セッション画面を開く (公式UI)", true, None::<&str>)?;
+            let open_devtools = MenuItem::with_id(handle, "open_devtools", "セッションの開発者ツールを開く", true, None::<&str>)?;
             let toggle_mascot = MenuItem::with_id(handle, "toggle_mascot", "マスコットモード (アバター単体)", true, None::<&str>)?;
             let toggle_size = MenuItem::with_id(handle, "toggle_size", "（旧）中・小画面切替", true, None::<&str>)?;
             let open_browser = MenuItem::with_id(handle, "open_browser", "ブラウザで Muse を開く", true, None::<&str>)?;
@@ -859,6 +1084,7 @@ pub fn run() {
                 &[
                     &toggle_app,
                     &open_session,
+                    &open_devtools,
                     &toggle_mascot,
                     &toggle_size,
                     &open_browser,
@@ -882,6 +1108,12 @@ pub fn run() {
                         let app_clone = app.clone();
                         tauri::async_runtime::spawn(async move {
                             let _ = open_or_show_session(app_clone).await;
+                        });
+                    }
+                    "open_devtools" => {
+                        let app_clone = app.clone();
+                        tauri::async_runtime::spawn(async move {
+                            let _ = open_session_devtools(app_clone).await;
                         });
                     }
                     "toggle_mascot" => {
@@ -956,21 +1188,28 @@ pub fn run() {
                     clamp_window_to_monitor(&main_win, config.small_pos);
                 }
 
-                // ウィンドウ移動イベントで位置を自動保存
-                let app_handle_for_move = handle.clone();
+                // ウィンドウ終了・移動イベント
+                let app_handle_for_events = handle.clone();
                 main_win.on_window_event(move |event| {
-                    if let tauri::WindowEvent::Moved(pos) = event {
-                        let mut cfg = load_config_internal(&app_handle_for_move);
-                        if cfg.size_mode == "mascot" {
-                            cfg.mascot_pos = Some((pos.x, pos.y));
-                            let _ = save_config_internal(&app_handle_for_move, &cfg);
-                        } else if cfg.size_mode == "large" {
-                            cfg.large_pos = Some((pos.x, pos.y));
-                            let _ = save_config_internal(&app_handle_for_move, &cfg);
-                        } else if cfg.size_mode == "small" {
-                            cfg.small_pos = Some((pos.x, pos.y));
-                            let _ = save_config_internal(&app_handle_for_move, &cfg);
+                    match event {
+                        tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed => {
+                            // main ウィンドウが閉じられた場合はプロセスを残さず確実に完全終了
+                            app_handle_for_events.exit(0);
                         }
+                        tauri::WindowEvent::Moved(pos) => {
+                            let mut cfg = load_config_internal(&app_handle_for_events);
+                            if cfg.size_mode == "mascot" {
+                                cfg.mascot_pos = Some((pos.x, pos.y));
+                                let _ = save_config_internal(&app_handle_for_events, &cfg);
+                            } else if cfg.size_mode == "large" {
+                                cfg.large_pos = Some((pos.x, pos.y));
+                                let _ = save_config_internal(&app_handle_for_events, &cfg);
+                            } else if cfg.size_mode == "small" {
+                                cfg.small_pos = Some((pos.x, pos.y));
+                                let _ = save_config_internal(&app_handle_for_events, &cfg);
+                            }
+                        }
+                        _ => {}
                     }
                 });
             }
@@ -983,7 +1222,11 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             check_bridge_health,
             get_avatar_data_url,
+            get_avatar_video_pack,
+            get_plugin_configs,
+            get_avatar_state,
             get_chat_messages,
+            inspect_latest_message,
             send_chat_message,
             get_usage_limit,
             get_gadget_config,
