@@ -1095,7 +1095,7 @@ pub fn run() {
             let _tray = TrayIconBuilder::new()
                 .icon(tauri::include_image!("icons/128x128.png"))
                 .menu(&menu)
-                .tooltip("Muse Desktop Gadget")
+                .tooltip("Muse Desktop Mascot")
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "toggle_app" => {

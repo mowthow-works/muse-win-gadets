@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Muse Desktop Gadget",
+  "productName": "Muse Desktop Mascot",
   "version": "0.9.0",
   "identifier": "works.mowthow.muse.gadgets",
   "build": {
@@ -10,7 +10,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "Muse Desktop Gadget",
+        "title": "Muse Desktop Mascot",
         "label": "main",
         "width": 420,
         "height": 640,

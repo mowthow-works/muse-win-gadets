@@ -1,7 +1,8 @@
 [package]
 name = "muse-desktop-mascot"
 version = "0.9.0"
-description = "Desktop gadget for Windows to interact with Muse AI"
+description = "Desktop mascot for Windows to interact with Muse AI"
+license = "MIT"
 authors = ["kusak"]
 edition = "2021"
 

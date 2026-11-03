@@ -1,6 +1,6 @@
-# Muse Desktop Gadget (v0.9.0)
+# Muse Desktop Mascot (v0.9.0)
 
-Muse（パーソナルAIエージェント `https://muse.ai`）の Windows 向け常駐型デスクトップマスコット＆チャットガジェットです。  
+Muse（パーソナルAIエージェント `https://muse.ai`）の Windows 向け常駐型デスクトップマスコット＆チャット連携アプリです。  
 普段はデスクトップの隅に円形アバターマスコットとして控えめに常駐し、Muse の状態に応じたアニメーション・気まぐれアクション・新着メッセージのルパン風タイピング吹き出しを表示します。ダブルクリックやショートカットキー（`Ctrl + Shift + M`）で、いつでもフル機能の Muse AI チャット画面（セッション画面）を即座に呼び出せます。
 
 <div align="center">
@@ -164,3 +164,9 @@ npm run dev
 npm run build
 ```
 ビルド完了後、`src-tauri/target/release/muse-desktop-mascot.exe` が生成されます。
+
+---
+
+## 📜 ライセンス
+
+[MIT License](LICENSE) © 2026 mowthow-works

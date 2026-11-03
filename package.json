@@ -2,7 +2,8 @@
   "name": "muse-desktop-mascot",
   "private": true,
   "version": "0.9.0",
-  "description": "Windows Desktop Gadget for Muse AI",
+  "description": "Windows Desktop Mascot for Muse AI",
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "dev": "tauri dev",

@@ -1,4 +1,4 @@
-# AGENTS.md - Muse Desktop Gadget 開発・運用ルール
+# AGENTS.md - Muse Desktop Mascot 開発・運用ルール
 
 本ファイルは、AI エージェントが本リポジトリ（`muse-desktop-mascot`）で開発・ビルド・リリース作業を行う際に必ず遵守すべきプロジェクト固有ルールを定義します。
 
