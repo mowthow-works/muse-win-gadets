@@ -219,7 +219,8 @@ fn ensure_session_window(app: &AppHandle) -> Result<WebviewWindow, String> {
 
     let _ = window.set_icon(tauri::include_image!("icons/128x128.png"));
 
-    // セッション画面の「×」や最小化ボタン（Win+M含む）でマスコットモードへ移行
+    // セッション画面のフォーカス・表示状態とマスコットを完全同期
+    // 「Session画面が表にいないときはマスコット表示、Session画面が表にいるときはマスコット非表示」
     let handle_for_session = app.clone();
     window.on_window_event(move |event| {
         match event {
@@ -239,13 +240,31 @@ fn ensure_session_window(app: &AppHandle) -> Result<WebviewWindow, String> {
                     });
                 }
             }
-            tauri::WindowEvent::Focused(false) => {
-                // 最小化ボタンや Win+M でフォーカスが外れ、かつ最小化状態の場合
+            tauri::WindowEvent::Focused(true) => {
+                // セッション画面が表に出た（フォーカス獲得）: マスコットを非表示にする
                 let h = handle_for_session.clone();
                 tauri::async_runtime::spawn(async move {
+                    if let Some(main_win) = h.get_webview_window("main") {
+                        let _ = main_win.hide();
+                    }
+                });
+            }
+            tauri::WindowEvent::Focused(false) => {
+                // セッション画面が裏に回った / 最小化された / 他アプリへフォーカスが移動した
+                // ダイアログ表示等の一時的なフォーカス変動を考慮し、100ms 後に状態を確定してマスコットを表示
+                let h = handle_for_session.clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
                     if let Some(s) = h.get_webview_window("session") {
-                        if s.is_minimized().unwrap_or(false) {
-                            let _ = hide_session(h).await;
+                        let is_focused = s.is_focused().unwrap_or(false);
+                        let is_minimized = s.is_minimized().unwrap_or(false);
+                        let is_visible = s.is_visible().unwrap_or(false);
+                        if !is_focused || is_minimized || !is_visible {
+                            if let Some(main_win) = h.get_webview_window("main") {
+                                let _ = enter_mascot_mode(h.clone()).await;
+                                let _ = main_win.show();
+                                // ※別アプリの操作を妨げないよう、ここではフォーカスを奪わない（set_focus は呼ばない）
+                            }
                         }
                     }
                 });
@@ -1007,9 +1026,11 @@ async fn hide_session(app: AppHandle) -> Result<SessionStatus, String> {
 #[tauri::command]
 async fn toggle_minimize_restore(app: AppHandle) -> Result<String, String> {
     let session = ensure_session_window(&app)?;
-    let is_session_vis = session.is_visible().unwrap_or(false);
+    let is_visible = session.is_visible().unwrap_or(false);
+    let is_focused = session.is_focused().unwrap_or(false);
+    let is_minimized = session.is_minimized().unwrap_or(false);
 
-    if is_session_vis {
+    if is_visible && is_focused && !is_minimized {
         let _ = hide_session(app).await;
         Ok("mascot".to_string())
     } else {
