@@ -60,6 +60,8 @@ const healthR5 = document.getElementById('health-r5');
 let isSessionVisible = false;
 let currentLimit = 5;
 let lastSeenAssistantText = null;
+let pendingAssistantText = null;
+let assistantCommitTimer = null;
 let lastKnownAvatarBlobUrl = null;
 let typingTimer = null;
 let autoHideTimer = null;
@@ -153,6 +155,27 @@ function hideMascotBubble() {
   }
   if (mascotBubble) {
     mascotBubble.classList.add('hidden');
+  }
+}
+
+// Muse のストリーミング返信がすべて完了した瞬間に確定表示するコミット関数
+function commitPendingAssistantMessage() {
+  if (assistantCommitTimer) {
+    clearTimeout(assistantCommitTimer);
+    assistantCommitTimer = null;
+  }
+  if (!pendingAssistantText || pendingAssistantText === lastSeenAssistantText) {
+    return;
+  }
+  const textToPlay = pendingAssistantText;
+  lastSeenAssistantText = textToPlay;
+  pendingAssistantText = null;
+
+  recordInteraction();
+  // 回答完了の歓喜ポーズ（6秒間）
+  setAvatarState('milestone_level_up', { durationMs: 6000, force: true, lockDuration: true });
+  if (document.body.classList.contains('mode-mascot')) {
+    playLupinTyping(textToPlay);
   }
 }
 
@@ -623,6 +646,10 @@ async function syncAvatarStateWithMuse() {
         recordInteraction();
         setAvatarState('milestone_level_up', { durationMs: 6000, lockDuration: true, force: true });
       } else if (res.state === 'idle') {
+        // Muse本体の作業が完了して idle に戻った場合、もし保留中の返信メッセージがあれば即座に全文表示
+        if (pendingAssistantText && pendingAssistantText !== lastSeenAssistantText) {
+          commitPendingAssistantMessage();
+        }
         // タッチリアクション中や3分放置アクション中は idle で上書きしない
         if (!isSpecialActionLocked) {
           if (currentAvatarState === 'working' || currentAvatarState === 'making_something') {
@@ -652,14 +679,28 @@ async function loadChatMessages() {
       const latestAssistant = assistantMsgs.length > 0 ? assistantMsgs[assistantMsgs.length - 1].text : null;
       if (latestAssistant) {
         if (lastSeenAssistantText === null) {
+          // 初回起動時: 過去の最新メッセージを記録するのみ（初回起動でいきなり過去ログをタイピングしない）
           lastSeenAssistantText = latestAssistant;
         } else if (latestAssistant !== lastSeenAssistantText) {
-          lastSeenAssistantText = latestAssistant;
+          // 新着、またはストリーミング途中のメッセージを受信
+          pendingAssistantText = latestAssistant;
           recordInteraction();
-          // 新着メッセージが届いた瞬間 -> 歓喜・レベルアップポーズ（6秒間）
-          setAvatarState('milestone_level_up', { durationMs: 6000, force: true, lockDuration: true });
-          if (document.body.classList.contains('mode-mascot')) {
-            playLupinTyping(latestAssistant);
+
+          if (assistantCommitTimer) {
+            clearTimeout(assistantCommitTimer);
+            assistantCommitTimer = null;
+          }
+
+          // Muse 本体の動作状態を判定（作業中・返信中なら吹き出しは出さず全文完了を待つ）
+          const isMuseBusy = (currentAvatarState === 'working' || currentAvatarState === 'making_something');
+
+          if (isMuseBusy) {
+            // 生成中は吹き出しを出さず待機（アバターは作業中動画を継続）
+          } else {
+            // テキストの増加・更新が止まって 1.5 秒経過したら「生成完了（全文確定）」とみなして一度だけ綺麗に表示
+            assistantCommitTimer = setTimeout(() => {
+              commitPendingAssistantMessage();
+            }, 1500);
           }
         }
       }
