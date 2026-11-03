@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tauri::menu::{CheckMenuItem, Menu, MenuItem};
+use tauri::menu::{CheckMenuItem, Menu, MenuItem, Submenu};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, LogicalSize, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
@@ -77,8 +77,6 @@ const SMALL_WIDTH: f64 = 360.0;
 const SMALL_HEIGHT: f64 = 580.0;
 const LARGE_WIDTH: f64 = 1024.0;
 const LARGE_HEIGHT: f64 = 768.0;
-const MASCOT_WIDTH: f64 = 620.0;
-const MASCOT_HEIGHT: f64 = 260.0;
 
 static SESSION_BRIDGE_JS: &str = include_str!("session_bridge.js");
 
@@ -105,6 +103,10 @@ fn default_last_normal_mode() -> String {
     "small".to_string()
 }
 
+fn default_mascot_scale() -> String {
+    "standard".to_string()
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct GadgetConfig {
     pub size_mode: String, // "small", "large", or "mascot"
@@ -114,6 +116,8 @@ pub struct GadgetConfig {
     pub hotkey: String,
     #[serde(default = "default_avatar_name")]
     pub avatar_name: String,
+    #[serde(default = "default_mascot_scale")]
+    pub mascot_scale: String, // "small", "standard", or "large"
     pub last_limit_info: Option<UsageLimitInfo>,
     #[serde(default)]
     pub small_pos: Option<(i32, i32)>,
@@ -135,6 +139,7 @@ impl Default for GadgetConfig {
             message_limit: 5,
             hotkey: "Ctrl+Shift+M".to_string(),
             avatar_name: default_avatar_name(),
+            mascot_scale: default_mascot_scale(),
             last_limit_info: None,
             small_pos: None,
             large_pos: None,
@@ -142,6 +147,22 @@ impl Default for GadgetConfig {
             session_pos: None,
             session_size: None,
         }
+    }
+}
+
+fn get_mascot_dimensions(scale_str: &str) -> (f64, f64, f64) {
+    match scale_str {
+        "large" => (775.0, 325.0, 1.25),
+        "small" => (496.0, 208.0, 0.8),
+        _ => (620.0, 260.0, 1.0), // "standard"
+    }
+}
+
+fn get_mascot_avatar_size(scale_str: &str) -> f64 {
+    match scale_str {
+        "large" => 145.0,
+        "small" => 93.0,
+        _ => 116.0,
     }
 }
 
@@ -231,7 +252,7 @@ fn ensure_session_window(app: &AppHandle) -> Result<WebviewWindow, String> {
 
     // 保存済みの座標があれば復元（モニタ外はみ出し防止クランプ）
     if let Some(pos) = config.session_pos {
-        clamp_window_to_monitor(&window, Some(pos));
+        clamp_window_to_monitor(&window, Some(pos), None);
     }
 
     // セッション画面のフォーカス・表示状態とマスコットを完全同期
@@ -986,13 +1007,55 @@ fn save_gadget_config(app: AppHandle, config: GadgetConfig) -> Result<(), String
     save_config_internal(&app, &config)
 }
 
-fn get_mascot_default_position(win: &WebviewWindow) -> (i32, i32) {
-    if let Ok(Some(monitor)) = win.current_monitor() {
+fn get_nearest_monitor(win: &WebviewWindow, target_x: i32, target_y: i32) -> Option<tauri::Monitor> {
+    if let Ok(monitors) = win.available_monitors() {
+        if monitors.is_empty() {
+            return None;
+        }
+        // 1. target 座標を内包するモニタを探す
+        for mon in &monitors {
+            let pos = mon.position();
+            let size = mon.size();
+            if target_x >= pos.x
+                && target_x < pos.x + size.width as i32
+                && target_y >= pos.y
+                && target_y < pos.y + size.height as i32
+            {
+                return Some(mon.clone());
+            }
+        }
+        // 2. target 座標に最も近いモニタ（中心点間距離の二乗が最小のモニタ）
+        let mut best: Option<(i64, tauri::Monitor)> = None;
+        for mon in monitors {
+            let pos = mon.position();
+            let size = mon.size();
+            let cx = pos.x as i64 + (size.width as i64) / 2;
+            let cy = pos.y as i64 + (size.height as i64) / 2;
+            let dx = cx - (target_x as i64);
+            let dy = cy - (target_y as i64);
+            let dist_sq = dx * dx + dy * dy;
+            match best {
+                Some((d, _)) if dist_sq < d => best = Some((dist_sq, mon)),
+                None => best = Some((dist_sq, mon)),
+                _ => {}
+            }
+        }
+        if let Some((_, mon)) = best {
+            return Some(mon);
+        }
+    }
+    win.current_monitor().ok().flatten().or_else(|| win.primary_monitor().ok().flatten())
+}
+
+fn get_mascot_default_position(win: &WebviewWindow, scale_str: &str) -> (i32, i32) {
+    let (mw, mh, _) = get_mascot_dimensions(scale_str);
+    let monitor = win.current_monitor().ok().flatten().or_else(|| win.primary_monitor().ok().flatten());
+    if let Some(monitor) = monitor {
         let mon_pos = monitor.position();
         let mon_size = monitor.size();
         let scale = monitor.scale_factor();
-        let win_w = (MASCOT_WIDTH * scale) as i32;
-        let win_h = (MASCOT_HEIGHT * scale) as i32;
+        let win_w = (mw * scale) as i32;
+        let win_h = (mh * scale) as i32;
         // デスクトップ右下隅（タスクバーの上マージン約 56px、右端マージン約 20px）
         let x = mon_pos.x + (mon_size.width as i32) - win_w - 20;
         let y = mon_pos.y + (mon_size.height as i32) - win_h - 56;
@@ -1002,21 +1065,31 @@ fn get_mascot_default_position(win: &WebviewWindow) -> (i32, i32) {
     }
 }
 
-fn clamp_window_to_monitor(win: &WebviewWindow, target_pos: Option<(i32, i32)>) {
-    let Ok(Some(monitor)) = win.current_monitor() else {
-        if let Some((x, y)) = target_pos {
-            let _ = win.set_position(tauri::PhysicalPosition::new(x, y));
-        }
+fn clamp_window_to_monitor(
+    win: &WebviewWindow,
+    target_pos: Option<(i32, i32)>,
+    target_size: Option<tauri::PhysicalSize<u32>>,
+) {
+    let cur_pos = win.outer_position().unwrap_or(tauri::PhysicalPosition::new(100, 100));
+    let (tx, ty) = target_pos.unwrap_or((cur_pos.x, cur_pos.y));
+
+    // 現在のウィンドウのモニタ、または target 座標に最も近いモニタを確実に選択
+    let monitor = win.current_monitor().ok().flatten().or_else(|| {
+        get_nearest_monitor(win, tx, ty)
+    });
+
+    let Some(monitor) = monitor else {
+        let _ = win.set_position(tauri::PhysicalPosition::new(tx, ty));
         return;
     };
     let mon_pos = monitor.position();
     let mon_size = monitor.size();
-    let win_size = win.outer_size().unwrap_or(tauri::PhysicalSize::new(360, 580));
-
-    let (mut x, mut y) = target_pos.unwrap_or_else(|| {
-        let cur = win.outer_position().unwrap_or(tauri::PhysicalPosition::new(mon_pos.x + 60, mon_pos.y + 60));
-        (cur.x, cur.y)
+    let win_size = target_size.unwrap_or_else(|| {
+        win.outer_size().unwrap_or(tauri::PhysicalSize::new(360, 580))
     });
+
+    let mut x = tx;
+    let mut y = ty;
 
     let max_x = mon_pos.x + (mon_size.width as i32) - (win_size.width as i32) - 12;
     let max_y = mon_pos.y + (mon_size.height as i32) - (win_size.height as i32) - 48;
@@ -1061,6 +1134,8 @@ async fn toggle_size_mode(app: AppHandle) -> Result<String, String> {
         } else {
             (SMALL_WIDTH, SMALL_HEIGHT)
         };
+        let scale_factor = win.scale_factor().unwrap_or(1.0);
+        let target_size = tauri::PhysicalSize::new((w * scale_factor).round() as u32, (h * scale_factor).round() as u32);
         let _ = win.set_size(LogicalSize::new(w, h));
 
         let saved_target = if next_mode == "large" {
@@ -1068,7 +1143,7 @@ async fn toggle_size_mode(app: AppHandle) -> Result<String, String> {
         } else {
             config.small_pos
         };
-        clamp_window_to_monitor(&win, saved_target);
+        clamp_window_to_monitor(&win, saved_target, Some(target_size));
     }
 
     config.size_mode = next_mode.clone();
@@ -1096,15 +1171,91 @@ async fn enter_mascot_mode(app: AppHandle) -> Result<String, String> {
             }
         }
 
-        let _ = win.set_size(LogicalSize::new(MASCOT_WIDTH, MASCOT_HEIGHT));
-        let target_pos = config.mascot_pos.or_else(|| Some(get_mascot_default_position(&win)));
-        clamp_window_to_monitor(&win, target_pos);
+        let (mw, mh, _) = get_mascot_dimensions(&config.mascot_scale);
+        let scale_factor = win.scale_factor().unwrap_or(1.0);
+        let target_size = tauri::PhysicalSize::new((mw * scale_factor).round() as u32, (mh * scale_factor).round() as u32);
+        let _ = win.set_size(LogicalSize::new(mw, mh));
+        let target_pos = config.mascot_pos.or_else(|| Some(get_mascot_default_position(&win, &config.mascot_scale)));
+        clamp_window_to_monitor(&win, target_pos, Some(target_size));
     }
 
     config.size_mode = "mascot".to_string();
     let _ = save_config_internal(&app, &config);
 
     Ok("mascot".to_string())
+}
+
+#[tauri::command]
+async fn set_mascot_scale(app: AppHandle, scale: String) -> Result<String, String> {
+    let mut config = load_config_internal(&app);
+    let old_scale = config.mascot_scale.clone();
+    let scale_str = match scale.as_str() {
+        "large" => "large",
+        "small" => "small",
+        _ => "standard",
+    };
+    config.mascot_scale = scale_str.to_string();
+
+    if let Some(win) = app.get_webview_window("main") {
+        if config.size_mode == "mascot" {
+            let (old_lw, old_lh, _) = get_mascot_dimensions(&old_scale);
+            let (new_lw, new_lh, _) = get_mascot_dimensions(scale_str);
+
+            let cur_pos = win.outer_position().unwrap_or(tauri::PhysicalPosition::new(100, 100));
+            let scale_factor = win.scale_factor().unwrap_or(1.0);
+
+            let old_pw = (old_lw * scale_factor).round() as i32;
+            let old_ph = (old_lh * scale_factor).round() as i32;
+            let new_pw = (new_lw * scale_factor).round() as i32;
+            let new_ph = (new_lh * scale_factor).round() as i32;
+
+            let old_avatar_lw = get_mascot_avatar_size(&old_scale);
+            let new_avatar_lw = get_mascot_avatar_size(scale_str);
+
+            let old_avatar_pw = old_avatar_lw * scale_factor;
+            let new_avatar_pw = new_avatar_lw * scale_factor;
+            let pad_p = 6.0 * scale_factor;
+
+            let best_mon = get_nearest_monitor(&win, cur_pos.x, cur_pos.y);
+            let mon_center_x = best_mon
+                .as_ref()
+                .map(|m| m.position().x + (m.size().width as i32) / 2)
+                .unwrap_or(960);
+
+            // アバターがウィンドウの右端にあるか（bubble-on-left: 画面右半分にある時）
+            let win_center_x = cur_pos.x + old_pw / 2;
+            let is_on_right = win_center_x > mon_center_x;
+
+            // アバター（丸い顔アイコン）の画面上の絶対中心座標を厳密に固定
+            let cur_avatar_cx = if is_on_right {
+                (cur_pos.x as f64) + (old_pw as f64) - (pad_p + old_avatar_pw / 2.0)
+            } else {
+                (cur_pos.x as f64) + (pad_p + old_avatar_pw / 2.0)
+            };
+            let cur_avatar_cy = (cur_pos.y as f64) + (old_ph as f64) / 2.0;
+
+            // 新しいウィンドウ位置: アバターの画面中心座標が寸分違わず一致するように逆算
+            let target_x = if is_on_right {
+                cur_avatar_cx - ((new_pw as f64) - (pad_p + new_avatar_pw / 2.0))
+            } else {
+                cur_avatar_cx - (pad_p + new_avatar_pw / 2.0)
+            }.round() as i32;
+
+            let target_y = (cur_avatar_cy - (new_ph as f64) / 2.0).round() as i32;
+
+            let target_size = tauri::PhysicalSize::new(new_pw as u32, new_ph as u32);
+            let _ = win.set_size(LogicalSize::new(new_lw, new_lh));
+            clamp_window_to_monitor(&win, Some((target_x, target_y)), Some(target_size));
+
+            if let Ok(new_pos) = win.outer_position() {
+                config.mascot_pos = Some((new_pos.x, new_pos.y));
+            }
+        }
+        let _ = win.emit("mascot-scale-changed", scale_str);
+    }
+
+    let _ = save_config_internal(&app, &config);
+    Ok(scale_str.to_string())
 }
 
 #[tauri::command]
@@ -1146,6 +1297,8 @@ async fn restore_from_mascot(app: AppHandle) -> Result<String, String> {
         } else {
             (SMALL_WIDTH, SMALL_HEIGHT)
         };
+        let scale_factor = win.scale_factor().unwrap_or(1.0);
+        let target_size = tauri::PhysicalSize::new((w * scale_factor).round() as u32, (h * scale_factor).round() as u32);
         let _ = win.set_size(LogicalSize::new(w, h));
 
         let saved_target = if target_mode == "large" {
@@ -1153,7 +1306,7 @@ async fn restore_from_mascot(app: AppHandle) -> Result<String, String> {
         } else {
             config.small_pos
         };
-        clamp_window_to_monitor(&win, saved_target);
+        clamp_window_to_monitor(&win, saved_target, Some(target_size));
     }
 
     config.size_mode = target_mode.to_string();
@@ -1357,7 +1510,44 @@ pub fn run() {
             )?;
             let item_sound_clone = item_sound.clone();
 
-            let toggle_size = MenuItem::with_id(handle, "toggle_size", "（旧）中・小画面切替", true, None::<&str>)?;
+            // マスコットの表示サイズ設定 (Issue #25)
+            let cur_scale = load_config_internal(handle).mascot_scale;
+            let item_scale_large = CheckMenuItem::with_id(
+                handle,
+                "scale_large",
+                "大 (125%)",
+                true,
+                cur_scale == "large",
+                None::<&str>,
+            )?;
+            let item_scale_standard = CheckMenuItem::with_id(
+                handle,
+                "scale_standard",
+                "標準 (100%)",
+                true,
+                cur_scale == "standard" || (cur_scale != "large" && cur_scale != "small"),
+                None::<&str>,
+            )?;
+            let item_scale_small = CheckMenuItem::with_id(
+                handle,
+                "scale_small",
+                "小 (80%)",
+                true,
+                cur_scale == "small",
+                None::<&str>,
+            )?;
+
+            let item_scale_large_clone = item_scale_large.clone();
+            let item_scale_standard_clone = item_scale_standard.clone();
+            let item_scale_small_clone = item_scale_small.clone();
+
+            let sub_mascot_size = Submenu::with_items(
+                handle,
+                "マスコット表示サイズ",
+                true,
+                &[&item_scale_large, &item_scale_standard, &item_scale_small],
+            )?;
+
             let open_browser = MenuItem::with_id(handle, "open_browser", "ブラウザで Muse を開く", true, None::<&str>)?;
             let quit = MenuItem::with_id(handle, "quit", "終了", true, None::<&str>)?;
 
@@ -1370,9 +1560,9 @@ pub fn run() {
                     &item_open_mascot_devtools,
                     &item_open_session_devtools,
                     &toggle_mascot,
+                    &sub_mascot_size,
                     &item_autostart,
                     &item_sound,
-                    &toggle_size,
                     &open_browser,
                     &quit,
                 ],
@@ -1443,6 +1633,33 @@ pub fn run() {
                         let _ = save_plugin_configs(app.clone(), configs.setting, configs.quotes);
                         let _ = item_sound_clone.set_checked(next);
                     }
+                    "scale_large" => {
+                        let _ = item_scale_large_clone.set_checked(true);
+                        let _ = item_scale_standard_clone.set_checked(false);
+                        let _ = item_scale_small_clone.set_checked(false);
+                        let app_clone = app.clone();
+                        tauri::async_runtime::spawn(async move {
+                            let _ = set_mascot_scale(app_clone, "large".to_string()).await;
+                        });
+                    }
+                    "scale_standard" => {
+                        let _ = item_scale_large_clone.set_checked(false);
+                        let _ = item_scale_standard_clone.set_checked(true);
+                        let _ = item_scale_small_clone.set_checked(false);
+                        let app_clone = app.clone();
+                        tauri::async_runtime::spawn(async move {
+                            let _ = set_mascot_scale(app_clone, "standard".to_string()).await;
+                        });
+                    }
+                    "scale_small" => {
+                        let _ = item_scale_large_clone.set_checked(false);
+                        let _ = item_scale_standard_clone.set_checked(false);
+                        let _ = item_scale_small_clone.set_checked(true);
+                        let app_clone = app.clone();
+                        tauri::async_runtime::spawn(async move {
+                            let _ = set_mascot_scale(app_clone, "small".to_string()).await;
+                        });
+                    }
                     "toggle_size" => {
                         let app_clone = app.clone();
                         tauri::async_runtime::spawn(async move {
@@ -1494,19 +1711,22 @@ pub fn run() {
                 let (w, h) = if config.size_mode == "large" {
                     (LARGE_WIDTH, LARGE_HEIGHT)
                 } else if config.size_mode == "mascot" {
-                    (MASCOT_WIDTH, MASCOT_HEIGHT)
+                    let (mw, mh, _) = get_mascot_dimensions(&config.mascot_scale);
+                    (mw, mh)
                 } else {
                     (SMALL_WIDTH, SMALL_HEIGHT)
                 };
+                let scale_factor = main_win.scale_factor().unwrap_or(1.0);
+                let target_size = tauri::PhysicalSize::new((w * scale_factor).round() as u32, (h * scale_factor).round() as u32);
                 let _ = main_win.set_size(LogicalSize::new(w, h));
 
                 if config.size_mode == "mascot" {
-                    let target_pos = config.mascot_pos.or_else(|| Some(get_mascot_default_position(&main_win)));
-                    clamp_window_to_monitor(&main_win, target_pos);
+                    let target_pos = config.mascot_pos.or_else(|| Some(get_mascot_default_position(&main_win, &config.mascot_scale)));
+                    clamp_window_to_monitor(&main_win, target_pos, Some(target_size));
                 } else if config.size_mode == "large" {
-                    clamp_window_to_monitor(&main_win, config.large_pos);
+                    clamp_window_to_monitor(&main_win, config.large_pos, Some(target_size));
                 } else {
-                    clamp_window_to_monitor(&main_win, config.small_pos);
+                    clamp_window_to_monitor(&main_win, config.small_pos, Some(target_size));
                 }
 
                 // ウィンドウ終了・移動イベント
@@ -1559,6 +1779,7 @@ pub fn run() {
             toggle_size_mode,
             enter_mascot_mode,
             restore_from_mascot,
+            set_mascot_scale,
             toggle_minimize_restore,
             save_current_window_position,
             open_in_browser,

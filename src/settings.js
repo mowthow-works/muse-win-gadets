@@ -92,6 +92,8 @@ const inputSoundVolume = document.getElementById('input-sound-volume');
 const soundVolumeDisplay = document.getElementById('sound-volume-display');
 const btnTestSound = document.getElementById('btn-test-sound');
 
+const scaleRadios = document.querySelectorAll('input[name="mascot-scale"]');
+
 const touchQuotesListEl = document.getElementById('touch-quotes-list');
 const btnAddTouchQuote = document.getElementById('btn-add-touch-quote');
 const idleQuotesListEl = document.getElementById('idle-quotes-list');
@@ -312,6 +314,15 @@ async function loadConfigs() {
     if (inputSoundVolume) inputSoundVolume.value = vol;
     if (soundVolumeDisplay) soundVolumeDisplay.textContent = `${vol}%`;
 
+    // マスコット表示サイズ（スケール）のバインド (Issue #25)
+    try {
+      const gConfig = await invoke('get_gadget_config');
+      if (gConfig && gConfig.mascot_scale) {
+        const targetRadio = document.querySelector(`input[name="mascot-scale"][value="${gConfig.mascot_scale}"]`);
+        if (targetRadio) targetRadio.checked = true;
+      }
+    } catch (_) {}
+
     renderAllQuotes();
   } catch (err) {
     console.error('Failed to load configs:', err);
@@ -490,6 +501,19 @@ if (btnTestSound) {
   btnTestSound.addEventListener('click', playTestPreviewSound);
 }
 
+// マスコット表示サイズ（スケール）のリアルタイム切替 (Issue #25)
+scaleRadios.forEach(radio => {
+  radio.addEventListener('change', async (e) => {
+    if (e.target.checked) {
+      try {
+        await invoke('set_mascot_scale', { scale: e.target.value });
+      } catch (err) {
+        console.warn('Failed to set mascot scale:', err);
+      }
+    }
+  });
+});
+
 // フォルダを開くボタン
 btnOpenAvatarsDir.addEventListener('click', async () => {
   try {
@@ -521,6 +545,12 @@ btnResetDefaults.addEventListener('click', () => {
   if (toggleSoundEnabled) toggleSoundEnabled.checked = true;
   if (inputSoundVolume) inputSoundVolume.value = 30;
   if (soundVolumeDisplay) soundVolumeDisplay.textContent = '30%';
+
+  const stdRadio = document.querySelector('input[name="mascot-scale"][value="standard"]');
+  if (stdRadio) {
+    stdRadio.checked = true;
+    invoke('set_mascot_scale', { scale: 'standard' }).catch(() => {});
+  }
 
   currentQuotes = {
     touch_reactions: [
@@ -666,6 +696,11 @@ btnSave.addEventListener('click', async () => {
       setting: currentSetting,
       quotes: currentQuotes
     });
+
+    const checkedScale = document.querySelector('input[name="mascot-scale"]:checked');
+    if (checkedScale) {
+      await invoke('set_mascot_scale', { scale: checkedScale.value });
+    }
 
     showStatus('設定を保存してマスコットへ適用しました！', 'success');
   } catch (err) {

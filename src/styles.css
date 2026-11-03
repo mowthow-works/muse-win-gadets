@@ -770,14 +770,59 @@ body.mode-mascot {
   overflow: hidden;
 }
 
+/* マスコットスケール切替 (Issue #25) - zoom を廃止し、WebView2 の動画描画カリング・消失を完全に防止 */
+body.mode-mascot {
+  --mascot-avatar-size: 116px;
+  --mascot-avatar-font: 11.5px;
+  --mascot-badge-font: 10px;
+  --mascot-bubble-w: 460px;
+  --mascot-bubble-font: 13px;
+  --mascot-bubble-title: 10.5px;
+  --mascot-bubble-max-h: 175px;
+  --mascot-unread-size: 24px;
+}
+
+body.mode-mascot.scale-small {
+  --mascot-avatar-size: 93px;
+  --mascot-avatar-font: 9.5px;
+  --mascot-badge-font: 8.5px;
+  --mascot-bubble-w: 368px;
+  --mascot-bubble-font: 10.5px;
+  --mascot-bubble-title: 9px;
+  --mascot-bubble-max-h: 140px;
+  --mascot-unread-size: 20px;
+}
+
+body.mode-mascot.scale-standard {
+  --mascot-avatar-size: 116px;
+  --mascot-avatar-font: 11.5px;
+  --mascot-badge-font: 10px;
+  --mascot-bubble-w: 460px;
+  --mascot-bubble-font: 13px;
+  --mascot-bubble-title: 10.5px;
+  --mascot-bubble-max-h: 175px;
+  --mascot-unread-size: 24px;
+}
+
+body.mode-mascot.scale-large {
+  --mascot-avatar-size: 145px;
+  --mascot-avatar-font: 14.5px;
+  --mascot-badge-font: 12.5px;
+  --mascot-bubble-w: 575px;
+  --mascot-bubble-font: 16px;
+  --mascot-bubble-title: 13px;
+  --mascot-bubble-max-h: 220px;
+  --mascot-unread-size: 30px;
+}
+
 body.mode-mascot .gadget-container {
   background: transparent !important;
   border: none !important;
   box-shadow: none !important;
   backdrop-filter: none !important;
   padding: 6px !important;
-  width: 100vw;
-  height: 100vh;
+  width: 100% !important;
+  height: 100% !important;
   box-sizing: border-box;
   display: flex !important;
   flex-direction: row !important;
@@ -851,9 +896,9 @@ body.mode-mascot .avatar-column:active {
 }
 
 body.mode-mascot .avatar-wrapper {
-  width: 116px;
-  height: 116px;
-  min-width: 116px;
+  width: var(--mascot-avatar-size, 116px);
+  height: var(--mascot-avatar-size, 116px);
+  min-width: var(--mascot-avatar-size, 116px);
   border-radius: 50% !important;
   background: #ffffff;
   border: 2px solid rgba(56, 189, 248, 0.75);
@@ -927,7 +972,7 @@ body.mode-mascot .avatar-name {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  font-size: 11.5px;
+  font-size: var(--mascot-avatar-font, 11.5px);
   font-weight: 700;
   color: #ffffff;
   background: rgba(15, 23, 42, 0.88);
@@ -940,7 +985,7 @@ body.mode-mascot .avatar-name {
 
 .avatar-limit-badge {
   font-family: Consolas, monospace;
-  font-size: 10px;
+  font-size: var(--mascot-badge-font, 10px);
   font-weight: 700;
   color: var(--color-safe);
   background: rgba(255, 255, 255, 0.1);
@@ -978,10 +1023,10 @@ body.mode-mascot .unread-badge {
   position: absolute;
   top: 1px;
   right: 1px;
-  min-width: 24px;
-  height: 24px;
+  min-width: var(--mascot-unread-size, 24px);
+  height: var(--mascot-unread-size, 24px);
   padding: 0 6px;
-  border-radius: 12px;
+  border-radius: calc(var(--mascot-unread-size, 24px) / 2);
   background: linear-gradient(135deg, #ef4444, #dc2626);
   border: 2px solid #ffffff;
   color: #ffffff;
@@ -1028,8 +1073,8 @@ body:not(.mode-mascot) .unread-badge {
 /* ルパン風タイピング吹き出し */
 .mascot-bubble {
   position: relative;
-  width: 460px;
-  max-width: 480px;
+  width: var(--mascot-bubble-w, 460px);
+  max-width: var(--mascot-bubble-w, 460px);
   background: rgba(15, 23, 42, 0.94);
   backdrop-filter: blur(16px);
   border: 1.5px solid rgba(56, 189, 248, 0.45);
@@ -1071,7 +1116,7 @@ body:not(.mode-mascot) .unread-badge {
 }
 
 .mascot-bubble-title {
-  font-size: 10.5px;
+  font-size: var(--mascot-bubble-title, 10.5px);
   font-weight: 700;
   color: var(--color-accent);
   letter-spacing: 0.6px;
@@ -1096,7 +1141,7 @@ body:not(.mode-mascot) .unread-badge {
   margin: 0;
   padding: 0;
   padding-right: 4px;
-  max-height: 175px;
+  max-height: var(--mascot-bubble-max-h, 175px);
   overflow-y: auto;
   text-align: left;
   display: block;
@@ -1104,7 +1149,7 @@ body:not(.mode-mascot) .unread-badge {
 
 .mascot-bubble-text {
   font-family: Consolas, 'Courier New', monospace, sans-serif;
-  font-size: 13px;
+  font-size: var(--mascot-bubble-font, 13px);
   line-height: 1.55;
   color: #f8fafc;
   word-break: break-word;
@@ -1136,7 +1181,7 @@ body:not(.mode-mascot) .unread-badge {
   color: #10b981;
   font-weight: bold;
   margin-left: 2px;
-  font-size: 13px;
+  font-size: var(--mascot-bubble-font, 13px);
   animation: cursorBlink 0.6s infinite;
 }
 

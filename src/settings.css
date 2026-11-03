@@ -657,3 +657,63 @@ input[type="range"]::-webkit-slider-thumb:hover {
   padding: 4px 10px;
   font-size: 12px;
 }
+
+/* マスコット表示サイズ (Issue #25) */
+.scale-options-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+
+.scale-option-card {
+  position: relative;
+  cursor: pointer;
+  display: flex;
+}
+
+.scale-option-card input[type="radio"] {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.scale-card-content {
+  width: 100%;
+  background: rgba(15, 23, 42, 0.4);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  padding: 12px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: center;
+  text-align: center;
+  transition: all 0.2s ease;
+}
+
+.scale-option-card:hover .scale-card-content {
+  border-color: rgba(56, 189, 248, 0.4);
+  background: rgba(15, 23, 42, 0.6);
+}
+
+.scale-option-card input[type="radio"]:checked + .scale-card-content {
+  border-color: var(--accent-blue);
+  background: rgba(56, 189, 248, 0.12);
+  box-shadow: 0 0 12px rgba(56, 189, 248, 0.25);
+}
+
+.scale-label {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.scale-option-card input[type="radio"]:checked + .scale-card-content .scale-label {
+  color: var(--accent-blue);
+}
+
+.scale-desc {
+  font-size: 10.5px;
+  color: var(--text-muted);
+}

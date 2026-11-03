@@ -1254,6 +1254,13 @@ function applySizeMode(mode) {
   }
 }
 
+function applyMascotScale(scale) {
+  document.body.classList.remove('scale-small', 'scale-standard', 'scale-large');
+  const validScale = (scale === 'large' || scale === 'small') ? scale : 'standard';
+  document.body.classList.add(`scale-${validScale}`);
+  setTimeout(updateMascotBubbleDirection, 50);
+}
+
 // ==========================================
 // 初期化 & イベントリスナー
 // ==========================================
@@ -1434,6 +1441,10 @@ window.addEventListener('DOMContentLoaded', async () => {
     window.__TAURI__.event.listen('settings-updated', () => {
       refreshPluginConfigs();
     });
+    // マスコットのスケール変更イベントを受信 (Issue #25)
+    window.__TAURI__.event.listen('mascot-scale-changed', (event) => {
+      applyMascotScale(event.payload);
+    });
   }
 
   // 初期起動時は確実に未読バッジを非表示 (Issue #20)
@@ -1465,6 +1476,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     const config = await invoke('get_gadget_config');
     if (config) {
       applySizeMode(config.size_mode || 'small');
+      applyMascotScale(config.mascot_scale || 'standard');
       if (config.message_limit) {
         currentLimit = config.message_limit;
         msgLimitSelect.value = String(currentLimit);

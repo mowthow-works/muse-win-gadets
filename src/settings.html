@@ -44,6 +44,37 @@
           </div>
         </div>
 
+        <!-- マスコット表示サイズ (Issue #25) -->
+        <div class="card">
+          <div class="card-header">
+            <h3>📐 マスコット表示サイズ（スケール）</h3>
+          </div>
+          <p class="card-desc">お使いのディスプレイ解像度や作業スペースに合わせて、マスコットの大きさを変更できます。</p>
+          <div class="scale-options-grid">
+            <label class="scale-option-card">
+              <input type="radio" name="mascot-scale" value="small">
+              <div class="scale-card-content">
+                <span class="scale-label">小 (80%)</span>
+                <span class="scale-desc">省スペース・ノートPC向け</span>
+              </div>
+            </label>
+            <label class="scale-option-card">
+              <input type="radio" name="mascot-scale" value="standard" checked>
+              <div class="scale-card-content">
+                <span class="scale-label">標準 (100%)</span>
+                <span class="scale-desc">標準的なフルHD画面向け</span>
+              </div>
+            </label>
+            <label class="scale-option-card">
+              <input type="radio" name="mascot-scale" value="large">
+              <div class="scale-card-content">
+                <span class="scale-label">大 (125%)</span>
+                <span class="scale-desc">高解像度（WQHD / 4K）向け</span>
+              </div>
+            </label>
+          </div>
+        </div>
+
         <div class="card">
           <div class="card-header">
             <h3>動作タイマー設定（秒単位）</h3>
