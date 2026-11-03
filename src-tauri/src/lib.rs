@@ -5,11 +5,12 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tauri::menu::{Menu, MenuItem};
+use tauri::menu::{CheckMenuItem, Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, LogicalSize, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 use tauri_plugin_opener::OpenerExt;
+use tauri_plugin_autostart::ManagerExt;
 use base64::prelude::*;
 
 const EMBEDDED_SETTING_JSON: &str = include_str!("../assets/avatars/setting.json");
@@ -1100,6 +1101,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, Some(vec!["--autostart"])))
         .setup(|app| {
             let handle = app.handle();
 
@@ -1109,6 +1111,19 @@ pub fn run() {
             let item_open_mascot_devtools = MenuItem::with_id(handle, "open_mascot_devtools", "マスコットの開発者ツールを開く", true, None::<&str>)?;
             let item_open_session_devtools = MenuItem::with_id(handle, "open_devtools", "セッションの開発者ツールを開く", true, None::<&str>)?;
             let toggle_mascot = MenuItem::with_id(handle, "toggle_mascot", "マスコットモード (アバター単体)", true, None::<&str>)?;
+
+            // スタートアップ自動起動の初期化 (Issue #22)
+            let is_autostart = handle.autolaunch().is_enabled().unwrap_or(false);
+            let item_autostart = CheckMenuItem::with_id(
+                handle,
+                "toggle_autostart",
+                "Windows起動時に自動起動",
+                true,
+                is_autostart,
+                None::<&str>,
+            )?;
+            let item_autostart_clone = item_autostart.clone();
+
             let toggle_size = MenuItem::with_id(handle, "toggle_size", "（旧）中・小画面切替", true, None::<&str>)?;
             let open_browser = MenuItem::with_id(handle, "open_browser", "ブラウザで Muse を開く", true, None::<&str>)?;
             let quit = MenuItem::with_id(handle, "quit", "終了", true, None::<&str>)?;
@@ -1121,6 +1136,7 @@ pub fn run() {
                     &item_open_mascot_devtools,
                     &item_open_session_devtools,
                     &toggle_mascot,
+                    &item_autostart,
                     &toggle_size,
                     &open_browser,
                     &quit,
@@ -1132,7 +1148,7 @@ pub fn run() {
                 .menu(&menu)
                 .tooltip("Muse Desktop Mascot")
                 .show_menu_on_left_click(false)
-                .on_menu_event(|app, event| match event.id.as_ref() {
+                .on_menu_event(move |app, event| match event.id.as_ref() {
                     "toggle_app" => {
                         let app_clone = app.clone();
                         tauri::async_runtime::spawn(async move {
@@ -1162,6 +1178,19 @@ pub fn run() {
                         tauri::async_runtime::spawn(async move {
                             let _ = hide_session(app_clone).await;
                         });
+                    }
+                    "toggle_autostart" => {
+                        let autolaunch = app.autolaunch();
+                        let currently_enabled = autolaunch.is_enabled().unwrap_or(false);
+                        if currently_enabled {
+                            if autolaunch.disable().is_ok() {
+                                let _ = item_autostart_clone.set_checked(false);
+                            }
+                        } else {
+                            if autolaunch.enable().is_ok() {
+                                let _ = item_autostart_clone.set_checked(true);
+                            }
+                        }
                     }
                     "toggle_size" => {
                         let app_clone = app.clone();
