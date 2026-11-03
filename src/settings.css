@@ -590,3 +590,70 @@ input:checked + .slider:before {
   color: var(--accent-blue);
   margin: 0;
 }
+
+/* 効果音設定 (Issue #24) */
+.sound-setting-group {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  background: rgba(15, 23, 42, 0.4);
+  padding: 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-color);
+}
+
+.sound-toggle-row,
+.sound-volume-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.sound-label-area {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sound-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.volume-slider-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 140px;
+  height: 6px;
+  background: #334155;
+  border-radius: 4px;
+  outline: none;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--accent-blue);
+  cursor: pointer;
+  transition: transform 0.15s ease, background-color 0.15s ease;
+}
+
+input[type="range"]::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+  background: #38bdf8;
+}
+
+.btn-sm {
+  padding: 4px 10px;
+  font-size: 12px;
+}

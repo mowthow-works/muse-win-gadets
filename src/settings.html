@@ -96,6 +96,41 @@
             </div>
           </div>
         </div>
+
+        <!-- 効果音設定 (Issue #24) -->
+        <div class="card">
+          <div class="card-header">
+            <h3>🔊 効果音（SE）設定</h3>
+          </div>
+          <p class="card-desc">新着メッセージ通知音（ピコン♪）や吹き出しタイピング音（カタカタ…）、タッチ反応音を設定できます。</p>
+
+          <div class="sound-setting-group">
+            <div class="sound-toggle-row">
+              <div class="sound-label-area">
+                <span class="sound-title">効果音を鳴らす</span>
+                <span class="form-hint">新着通知やセリフ表示時の効果音を有効化します</span>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="toggle-sound-enabled" checked>
+                <span class="slider"></span>
+              </label>
+            </div>
+
+            <div class="sound-volume-row">
+              <div class="sound-label-area">
+                <label for="input-sound-volume">
+                  効果音の音量
+                  <span class="unit" id="sound-volume-display">30%</span>
+                </label>
+                <span class="form-hint">全体の音量を調整します（0〜100%）</span>
+              </div>
+              <div class="volume-slider-wrapper">
+                <input type="range" id="input-sound-volume" min="0" max="100" step="1" value="30">
+                <button type="button" class="btn btn-secondary btn-sm" id="btn-test-sound">🔊 テスト再生</button>
+              </div>
+            </div>
+          </div>
+        </div>
       </section>
 
       <!-- タブ2: 放置アクション ＆ セリフ -->

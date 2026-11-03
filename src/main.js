@@ -102,6 +102,193 @@ function updateMascotBubbleDirection() {
   }
 }
 
+// ==========================================
+// Web Audio API サウンドエンジン (Issue #24)
+// ==========================================
+let audioCtx = null;
+let typingAudioBuffers = [];
+
+function getAudioContext() {
+  if (!audioCtx) {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (AudioContextClass) {
+      audioCtx = new AudioContextClass();
+      initTypingBuffers();
+    }
+  }
+  if (audioCtx && audioCtx.state === 'suspended') {
+    audioCtx.resume().catch(() => {});
+  }
+  return audioCtx;
+}
+
+// メカニカルキースイッチの打鍵音バッファを事前生成（4バリエーション）
+function initTypingBuffers() {
+  if (!audioCtx || typingAudioBuffers.length > 0) return;
+  const sampleRate = audioCtx.sampleRate;
+  const duration = 0.035; // 35ms の打鍵音
+  const length = Math.floor(sampleRate * duration);
+
+  // 4種類の打鍵バリエーション（ピッチや共鳴を少しずつ変えてリアルな人間味を出す）
+  const configs = [
+    { startFreq: 1400, endFreq: 480, lowFreq: 320, noiseMix: 0.08 },
+    { startFreq: 1250, endFreq: 420, lowFreq: 280, noiseMix: 0.06 },
+    { startFreq: 1550, endFreq: 520, lowFreq: 350, noiseMix: 0.07 },
+    { startFreq: 1350, endFreq: 450, lowFreq: 300, noiseMix: 0.09 },
+  ];
+
+  for (let i = 0; i < 4; i++) {
+    const buffer = audioCtx.createBuffer(1, length, sampleRate);
+    const data = buffer.getChannelData(0);
+    const cfg = configs[i];
+
+    for (let j = 0; j < length; j++) {
+      const t = j / sampleRate;
+      // ピッチ急降下（硬質なキースイッチ接触音「カチッ」）
+      const freq1 = cfg.startFreq * Math.exp(-t * 180) + cfg.endFreq;
+      const attack = Math.sin(2 * Math.PI * freq1 * t) * Math.exp(-t * 150);
+
+      // 底打ちの低音共鳴音「コッ」
+      const bottom = Math.sin(2 * Math.PI * cfg.lowFreq * t) * Math.exp(-t * 100);
+
+      // わずかなクリックノイズ（指先とキートップの接触）
+      const noise = (Math.random() * 2 - 1) * Math.exp(-t * 260) * cfg.noiseMix;
+
+      data[j] = (attack * 0.7 + bottom * 0.3 + noise) * (1 - t / duration);
+    }
+    typingAudioBuffers.push(buffer);
+  }
+}
+
+// カタカタタイピング音の再生（心地よい打鍵リズムにスロットリング）
+let lastTypingSoundTime = 0;
+function playTypingSound() {
+  if (pluginSettings.sound_enabled === false) return;
+  const ctx = getAudioContext();
+  if (!ctx || typingAudioBuffers.length === 0) return;
+
+  const now = ctx.currentTime;
+  // 65ms 以内の連続再生はスロットル（秒間約15打鍵の心地よい「カタカタカタ…」リズムを維持）
+  if (now - lastTypingSoundTime < 0.065) return;
+  lastTypingSoundTime = now;
+
+  const volumeRatio = Math.max(0, Math.min(100, Number(pluginSettings.sound_volume) ?? 30)) / 100;
+  if (volumeRatio <= 0) return;
+
+  try {
+    const buf = typingAudioBuffers[Math.floor(Math.random() * typingAudioBuffers.length)];
+    const source = ctx.createBufferSource();
+    source.buffer = buf;
+
+    const gain = ctx.createGain();
+    gain.gain.value = volumeRatio * 0.45;
+
+    source.connect(gain);
+    gain.connect(ctx.destination);
+    source.start(now);
+  } catch (_) {}
+}
+
+// 新着通知音「ピコン♪」（2音アルペジオチャイム）
+function playNotificationSound() {
+  if (pluginSettings.sound_enabled === false) return;
+  const ctx = getAudioContext();
+  if (!ctx) return;
+
+  const volumeRatio = Math.max(0, Math.min(100, Number(pluginSettings.sound_volume) ?? 30)) / 100;
+  if (volumeRatio <= 0) return;
+
+  try {
+    const now = ctx.currentTime;
+    // 1音目: C6 (1046.5Hz)
+    const osc1 = ctx.createOscillator();
+    const gain1 = ctx.createGain();
+    osc1.type = 'sine';
+    osc1.frequency.setValueAtTime(1046.5, now);
+    gain1.gain.setValueAtTime(volumeRatio * 0.45, now);
+    gain1.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
+
+    osc1.connect(gain1);
+    gain1.connect(ctx.destination);
+    osc1.start(now);
+    osc1.stop(now + 0.12);
+
+    // 2音目: G6 (1567.98Hz)
+    const osc2 = ctx.createOscillator();
+    const gain2 = ctx.createGain();
+    osc2.type = 'sine';
+    osc2.frequency.setValueAtTime(1567.98, now + 0.08);
+    gain2.gain.setValueAtTime(0.001, now);
+    gain2.gain.setValueAtTime(volumeRatio * 0.55, now + 0.08);
+    gain2.gain.exponentialRampToValueAtTime(0.0001, now + 0.35);
+
+    osc2.connect(gain2);
+    gain2.connect(ctx.destination);
+    osc2.start(now + 0.08);
+    osc2.stop(now + 0.35);
+  } catch (_) {}
+}
+
+// マスコットクリック時の「ポコッ♪」音
+function playTouchReactionSound() {
+  if (pluginSettings.sound_enabled === false) return;
+  const ctx = getAudioContext();
+  if (!ctx) return;
+
+  const volumeRatio = Math.max(0, Math.min(100, Number(pluginSettings.sound_volume) ?? 30)) / 100;
+  if (volumeRatio <= 0) return;
+
+  try {
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(420, now);
+    osc.frequency.exponentialRampToValueAtTime(680, now + 0.05);
+
+    gain.gain.setValueAtTime(volumeRatio * 0.4, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
+
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.12);
+  } catch (_) {}
+}
+
+let currentTypingTargetText = '';
+let currentTypingIdx = 0;
+
+function startTypingLoop(text) {
+  const delay = Math.min(24, Math.max(10, Math.floor(1600 / Math.max(1, text.length))));
+
+  typingTimer = setInterval(() => {
+    if (currentTypingIdx < currentTypingTargetText.length) {
+      const char = currentTypingTargetText[currentTypingIdx];
+      mascotBubbleText.textContent += char;
+      currentTypingIdx++;
+      mascotBubbleText.scrollTop = mascotBubbleText.scrollHeight;
+      // 空白・改行以外でカタカタタイピング音を再生
+      if (char !== ' ' && char !== '\n' && char !== '\r' && char !== '\t' && char !== '　') {
+        playTypingSound();
+      }
+    } else {
+      clearInterval(typingTimer);
+      typingTimer = null;
+      // タイピング完了後、カーソルを少し待って非表示に
+      setTimeout(() => {
+        if (!typingTimer) mascotBubbleCursor.classList.add('hidden');
+      }, 700);
+      // setting.json の bubble_display_duration_sec 秒後に自動的にフェードアウト
+      const bubbleDurationMs = Math.max(1, Number(pluginSettings.bubble_display_duration_sec) || 30) * 1000;
+      autoHideTimer = setTimeout(() => {
+        mascotBubble.classList.add('hidden');
+      }, bubbleDurationMs);
+    }
+  }, delay);
+}
+
 function playLupinTyping(text) {
   if (!mascotBubble || !mascotBubbleText) return;
   const cleanedText = cleanMascotMessageText(text);
@@ -109,7 +296,32 @@ function playLupinTyping(text) {
 
   updateMascotBubbleDirection();
 
-  // 進行中のタイマーをクリア
+  // シームレス追記判定 (ストリーミング途中で更新された場合のチラつき・読み直し防止):
+  // もし吹き出しが現在表示中（またはタイピング中）で、
+  // 新しいテキストが現在のタイピング対象または表示中テキストの「続き（前方一致）」である場合は、
+  // 吹き出しを消去・リセットせず、目標テキストを更新して後ろにそのままタイピングを継続する！
+  const currentShown = mascotBubbleText.textContent || '';
+  const isCurrentlyActive = !mascotBubble.classList.contains('hidden');
+
+  if (isCurrentlyActive && (
+    (currentTypingTargetText && cleanedText.startsWith(currentTypingTargetText) && cleanedText.length >= currentTypingTargetText.length) ||
+    (currentShown && cleanedText.startsWith(currentShown) && cleanedText.length >= currentShown.length)
+  )) {
+    currentTypingTargetText = cleanedText;
+
+    // 前のタイピングが既に完了してフェードアウト待ちに入っていた場合はタイピングタイマーを再開
+    if (!typingTimer && currentTypingIdx < cleanedText.length) {
+      if (autoHideTimer) {
+        clearTimeout(autoHideTimer);
+        autoHideTimer = null;
+      }
+      mascotBubbleCursor.classList.remove('hidden');
+      startTypingLoop(cleanedText);
+    }
+    return;
+  }
+
+  // まったく新しい別メッセージの場合は初期化して開始
   if (typingTimer) {
     clearInterval(typingTimer);
     typingTimer = null;
@@ -119,34 +331,13 @@ function playLupinTyping(text) {
     autoHideTimer = null;
   }
 
+  currentTypingTargetText = cleanedText;
+  currentTypingIdx = 0;
   mascotBubbleText.textContent = '';
   mascotBubbleCursor.classList.remove('hidden');
   mascotBubble.classList.remove('hidden');
 
-  // 目で追うスピードより気持ち早いテンポ
-  // 1文字あたり12ms〜24ms（文字数に応じて適応調整）
-  const delay = Math.min(24, Math.max(10, Math.floor(1600 / Math.max(1, cleanedText.length))));
-
-  let idx = 0;
-  typingTimer = setInterval(() => {
-    if (idx < cleanedText.length) {
-      mascotBubbleText.textContent += cleanedText[idx];
-      idx++;
-      mascotBubbleText.scrollTop = mascotBubbleText.scrollHeight;
-    } else {
-      clearInterval(typingTimer);
-      typingTimer = null;
-      // タイピング完了後、カーソルを少し待って非表示に
-      setTimeout(() => {
-        mascotBubbleCursor.classList.add('hidden');
-      }, 700);
-      // setting.json の bubble_display_duration_sec 秒後に自動的にフェードアウト
-      const bubbleDurationMs = Math.max(1, Number(pluginSettings.bubble_display_duration_sec) || 30) * 1000;
-      autoHideTimer = setTimeout(() => {
-        mascotBubble.classList.add('hidden');
-      }, bubbleDurationMs);
-    }
-  }, delay);
+  startTypingLoop(cleanedText);
 }
 
 function hideMascotBubble() {
@@ -184,6 +375,8 @@ function clearUnreadBadge() {
 }
 
 // Muse のストリーミング返信がすべて完了した瞬間に確定表示するコミット関数
+let lastCommittedAssistantText = null;
+
 function commitPendingAssistantMessage() {
   if (assistantCommitTimer) {
     clearTimeout(assistantCommitTimer);
@@ -193,7 +386,9 @@ function commitPendingAssistantMessage() {
     return;
   }
   const textToPlay = pendingAssistantText;
+  const isExtension = !!(lastCommittedAssistantText && textToPlay.startsWith(lastCommittedAssistantText));
   lastSeenAssistantText = textToPlay;
+  lastCommittedAssistantText = textToPlay;
   pendingAssistantText = null;
 
   recordInteraction();
@@ -203,10 +398,11 @@ function commitPendingAssistantMessage() {
     playLupinTyping(textToPlay);
   }
 
-  // セッション画面が表に出ていない場合は未読バッジをカウントアップ (Issue #20)
-  if (!isSessionVisible) {
+  // セッション画面が表に出ていない場合は未読バッジをカウントアップ (同一メッセージのストリーミング延長なら二重加算しない)
+  if (!isSessionVisible && !isExtension) {
     unreadCount++;
     updateUnreadBadge();
+    playNotificationSound();
   }
 }
 
@@ -289,7 +485,9 @@ let pluginSettings = {
   default_action_duration_sec: 30,
   touch_reaction_duration_sec: 8,
   bubble_display_duration_sec: 30,
-  avoid_repeat_video: true
+  avoid_repeat_video: true,
+  sound_enabled: true,
+  sound_volume: 30
 };
 
 // quotes.json の動画別設定マップ（ホットリロード対応）
@@ -390,6 +588,12 @@ function applyPluginConfigs(setting, quotes) {
     }
     if (setting.avoid_repeat_video !== undefined) {
       pluginSettings.avoid_repeat_video = Boolean(setting.avoid_repeat_video);
+    }
+    if (setting.sound_enabled !== undefined) {
+      pluginSettings.sound_enabled = Boolean(setting.sound_enabled);
+    }
+    if (setting.sound_volume !== undefined) {
+      pluginSettings.sound_volume = Math.max(0, Math.min(100, Number(setting.sound_volume) || 30));
     }
   }
 
@@ -799,10 +1003,10 @@ async function loadChatMessages() {
           if (isMuseBusy) {
             // 生成中は吹き出しを出さず待機（アバターは作業中動画を継続）
           } else {
-            // テキストの増加・更新が止まって 1.5 秒経過したら「生成完了（全文確定）」とみなして一度だけ綺麗に表示
+            // テキストの増加・更新が止まって 2.5 秒経過したら「生成完了（全文確定）」とみなして一度だけ綺麗に表示
             assistantCommitTimer = setTimeout(() => {
               commitPendingAssistantMessage();
-            }, 1500);
+            }, 2500);
           }
         }
       }
@@ -1178,6 +1382,7 @@ window.addEventListener('DOMContentLoaded', async () => {
         // シングルクリック: つついて反応（setting.json の touch_reaction_duration_sec 秒間維持 + つぶやき）
         const touchDurationMs = Math.max(1, Number(pluginSettings.touch_reaction_duration_sec) || 8) * 1000;
         setAvatarState('milestone_level_up', { durationMs: touchDurationMs, lockDuration: true, force: true });
+        playTouchReactionSound();
         if (document.body.classList.contains('mode-mascot') && touchReactionsList.length > 0) {
           const reaction = touchReactionsList[Math.floor(Math.random() * touchReactionsList.length)];
           playLupinTyping(reaction);
@@ -1297,8 +1502,8 @@ window.addEventListener('DOMContentLoaded', async () => {
   // 3秒ごとのリアルタイム動作状態・チャット同期 ＆ 設定ホットリロード・放置監視
   setInterval(async () => {
     await refreshPluginConfigs();
-    await syncAvatarStateWithMuse();
     await loadChatMessages();
+    await syncAvatarStateWithMuse();
     checkIdleAction();
   }, 3000);
 

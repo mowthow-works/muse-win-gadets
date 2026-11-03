@@ -1279,6 +1279,22 @@ pub fn run() {
             )?;
             let item_autostart_clone = item_autostart.clone();
 
+            // 効果音（SE）の初期化 (Issue #24)
+            let initial_sound_enabled = load_plugin_configs_internal(handle)
+                .setting
+                .get("sound_enabled")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
+            let item_sound = CheckMenuItem::with_id(
+                handle,
+                "toggle_sound",
+                "効果音（SE）を鳴らす",
+                true,
+                initial_sound_enabled,
+                None::<&str>,
+            )?;
+            let item_sound_clone = item_sound.clone();
+
             let toggle_size = MenuItem::with_id(handle, "toggle_size", "（旧）中・小画面切替", true, None::<&str>)?;
             let open_browser = MenuItem::with_id(handle, "open_browser", "ブラウザで Muse を開く", true, None::<&str>)?;
             let quit = MenuItem::with_id(handle, "quit", "終了", true, None::<&str>)?;
@@ -1293,6 +1309,7 @@ pub fn run() {
                     &item_open_session_devtools,
                     &toggle_mascot,
                     &item_autostart,
+                    &item_sound,
                     &toggle_size,
                     &open_browser,
                     &quit,
@@ -1353,6 +1370,16 @@ pub fn run() {
                                 let _ = item_autostart_clone.set_checked(true);
                             }
                         }
+                    }
+                    "toggle_sound" => {
+                        let mut configs = load_plugin_configs_internal(app);
+                        let current = configs.setting.get("sound_enabled").and_then(|v| v.as_bool()).unwrap_or(true);
+                        let next = !current;
+                        if let Some(map) = configs.setting.as_object_mut() {
+                            map.insert("sound_enabled".to_string(), serde_json::Value::Bool(next));
+                        }
+                        let _ = save_plugin_configs(app.clone(), configs.setting, configs.quotes);
+                        let _ = item_sound_clone.set_checked(next);
                     }
                     "toggle_size" => {
                         let app_clone = app.clone();
