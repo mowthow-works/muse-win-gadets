@@ -121,6 +121,10 @@ pub struct GadgetConfig {
     pub large_pos: Option<(i32, i32)>,
     #[serde(default)]
     pub mascot_pos: Option<(i32, i32)>,
+    #[serde(default)]
+    pub session_pos: Option<(i32, i32)>,
+    #[serde(default)]
+    pub session_size: Option<(f64, f64)>,
 }
 
 impl Default for GadgetConfig {
@@ -135,6 +139,8 @@ impl Default for GadgetConfig {
             small_pos: None,
             large_pos: None,
             mascot_pos: None,
+            session_pos: None,
+            session_size: None,
         }
     }
 }
@@ -192,9 +198,12 @@ fn ensure_session_window(app: &AppHandle) -> Result<WebviewWindow, String> {
         .parse::<tauri::Url>()
         .map_err(|e| format!("URL parse error: {}", e))?;
 
+    let config = load_config_internal(app);
+    let (init_w, init_h) = config.session_size.unwrap_or((1024.0, 768.0));
+
     let mut builder = WebviewWindowBuilder::new(app, "session", WebviewUrl::External(url))
         .title("Muse AI - Session")
-        .inner_size(1024.0, 768.0)
+        .inner_size(init_w, init_h)
         .visible(false)
         .on_document_title_changed(|_win, title| {
             if let Ok(mut t) = doc_title_store().lock() {
@@ -220,6 +229,11 @@ fn ensure_session_window(app: &AppHandle) -> Result<WebviewWindow, String> {
 
     let _ = window.set_icon(tauri::include_image!("icons/128x128.png"));
 
+    // 保存済みの座標があれば復元（モニタ外はみ出し防止クランプ）
+    if let Some(pos) = config.session_pos {
+        clamp_window_to_monitor(&window, Some(pos));
+    }
+
     // セッション画面のフォーカス・表示状態とマスコットを完全同期
     // 「Session画面が表にいないときはマスコット表示、Session画面が表にいるときはマスコット非表示」
     let handle_for_session = app.clone();
@@ -232,12 +246,44 @@ fn ensure_session_window(app: &AppHandle) -> Result<WebviewWindow, String> {
                     let _ = hide_session(h).await;
                 });
             }
+            tauri::WindowEvent::Moved(pos) => {
+                let h = handle_for_session.clone();
+                let x = pos.x;
+                let y = pos.y;
+                tauri::async_runtime::spawn(async move {
+                    if let Some(s) = h.get_webview_window("session") {
+                        if !s.is_minimized().unwrap_or(false) {
+                            let mut config = load_config_internal(&h);
+                            config.session_pos = Some((x, y));
+                            let _ = save_config_internal(&h, &config);
+                        }
+                    }
+                });
+            }
             tauri::WindowEvent::Resized(size) => {
                 // Windows で最小化された場合、内部サイズが 0x0 になる
                 if size.width == 0 && size.height == 0 {
                     let h = handle_for_session.clone();
                     tauri::async_runtime::spawn(async move {
                         let _ = hide_session(h).await;
+                    });
+                } else {
+                    let h = handle_for_session.clone();
+                    let w_raw = size.width;
+                    let h_raw = size.height;
+                    tauri::async_runtime::spawn(async move {
+                        if let Some(s) = h.get_webview_window("session") {
+                            if !s.is_minimized().unwrap_or(false) {
+                                let scale = s.scale_factor().unwrap_or(1.0);
+                                let w = w_raw as f64 / scale;
+                                let h_val = h_raw as f64 / scale;
+                                if w >= 250.0 && h_val >= 250.0 {
+                                    let mut config = load_config_internal(&h);
+                                    config.session_size = Some((w, h_val));
+                                    let _ = save_config_internal(&h, &config);
+                                }
+                            }
+                        }
                     });
                 }
             }
@@ -1149,6 +1195,22 @@ async fn open_or_show_session(app: AppHandle) -> Result<SessionStatus, String> {
 #[tauri::command]
 async fn hide_session(app: AppHandle) -> Result<SessionStatus, String> {
     if let Some(session) = app.get_webview_window("session") {
+        if !session.is_minimized().unwrap_or(false) {
+            let mut config = load_config_internal(&app);
+            if let Ok(pos) = session.outer_position() {
+                config.session_pos = Some((pos.x, pos.y));
+            }
+            if let Ok(p_size) = session.inner_size() {
+                let scale = session.scale_factor().unwrap_or(1.0);
+                let w = p_size.width as f64 / scale;
+                let h = p_size.height as f64 / scale;
+                if w >= 250.0 && h >= 250.0 {
+                    config.session_size = Some((w, h));
+                }
+            }
+            let _ = save_config_internal(&app, &config);
+        }
+
         let _ = session.hide();
         let _ = session.unminimize();
 
