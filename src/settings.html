@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Muse Desktop Mascot - 設定</title>
+  <link rel="stylesheet" href="settings.css">
+</head>
+<body>
+  <div class="settings-container">
+    <!-- ヘッダー -->
+    <header class="settings-header">
+      <div class="header-title-box">
+        <div class="header-icon">⚙️</div>
+        <div>
+          <h1>Muse Desktop Mascot 設定</h1>
+          <p class="header-sub">マスコット動作タイマー・セリフ・動画プラグインの管理</p>
+        </div>
+      </div>
+    </header>
+
+    <!-- タブメニュー -->
+    <nav class="settings-tabs">
+      <button class="tab-btn active" data-tab="tab-timers">⏱️ タイマー・基本設定</button>
+      <button class="tab-btn" data-tab="tab-quotes">🎬 放置アクション ＆ セリフ</button>
+      <button class="tab-btn" data-tab="tab-folders">📁 フォルダ・データ管理</button>
+    </nav>
+
+    <!-- タブコンテンツエリア -->
+    <main class="settings-content">
+      <!-- タブ1: タイマー・基本設定 -->
+      <section class="tab-pane active" id="tab-timers">
+        <div class="card">
+          <div class="card-header">
+            <h3>アバター情報</h3>
+          </div>
+          <div class="form-group">
+            <label for="input-avatar-name">現在のアバター名</label>
+            <div class="readonly-input-group">
+              <input type="text" id="input-avatar-name" readonly value="ラッキー">
+              <span class="badge-synced">Muse本体と自動同期</span>
+            </div>
+            <p class="form-hint">※アバター名は Muse 本体のセッションから自動取得・同期されるため、本設定画面では変更できません。</p>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <h3>動作タイマー設定（秒単位）</h3>
+          </div>
+
+          <div class="form-grid">
+            <div class="form-group">
+              <label for="input-idle-threshold">
+                放置（IDLE）突入時間
+                <span class="unit">秒</span>
+              </label>
+              <input type="number" id="input-idle-threshold" min="10" max="3600" step="5" value="180">
+              <p class="form-hint">無操作がこの秒数続くと、放置アクションを開始します。（デフォルト: 180秒）</p>
+            </div>
+
+            <div class="form-group">
+              <label for="input-action-interval">
+                放置アクション発生間隔
+                <span class="unit">秒</span>
+              </label>
+              <input type="number" id="input-action-interval" min="10" max="3600" step="5" value="180">
+              <p class="form-hint">放置中に次の気まぐれアクションを行う間隔です。（デフォルト: 180秒）</p>
+            </div>
+
+            <div class="form-group">
+              <label for="input-default-duration">
+                放置動画の標準再生時間
+                <span class="unit">秒</span>
+              </label>
+              <input type="number" id="input-default-duration" min="5" max="300" step="1" value="30">
+              <p class="form-hint">プラグイン動画で個別時間が未指定の場合に適用されます。（デフォルト: 30秒）</p>
+            </div>
+
+            <div class="form-group">
+              <label for="input-bubble-duration">
+                吹き出し表示時間
+                <span class="unit">秒</span>
+              </label>
+              <input type="number" id="input-bubble-duration" min="3" max="300" step="1" value="30">
+              <p class="form-hint">セリフタイピング完了後、自動非表示になるまでの秒数です。（デフォルト: 30秒）</p>
+            </div>
+
+            <div class="form-group full-width">
+              <label for="input-touch-duration">
+                タッチリアクション維持時間
+                <span class="unit">秒</span>
+              </label>
+              <input type="number" id="input-touch-duration" min="2" max="60" step="1" value="8">
+              <p class="form-hint">マスコットをクリックした際の喜びポーズを維持する時間です。（デフォルト: 8秒）</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- タブ2: 放置アクション ＆ セリフ -->
+      <section class="tab-pane" id="tab-quotes">
+        <!-- 基本セリフ（クリック反応・通常つぶやき） -->
+        <div class="card">
+          <div class="card-header">
+            <h3>👆 クリック（タッチ）時のリアクションセリフ</h3>
+          </div>
+          <p class="card-desc">マスコットをシングルクリック（つついた時）に喜ぶポーズと一緒につぶやくセリフです。</p>
+          <div class="quotes-section">
+            <div id="touch-quotes-list" class="quotes-list"></div>
+            <button class="btn-add-quote" id="btn-add-touch-quote">＋ リアクションセリフを追加</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <h3>💬 通常待機時の気まぐれつぶやき</h3>
+          </div>
+          <p class="card-desc">プラグイン動画が再生されない時（通常 idle 動画のまま）につぶやくセリフです。</p>
+          <div class="quotes-section">
+            <div id="idle-quotes-list" class="quotes-list"></div>
+            <button class="btn-add-quote" id="btn-add-idle-quote">＋ つぶやきセリフを追加</button>
+          </div>
+        </div>
+
+        <!-- プラグイン動画ごとの設定 -->
+        <div class="card">
+          <div class="action-bar">
+            <div>
+              <h3>🎬 プラグイン動画ごとの個別設定</h3>
+              <p class="form-hint">各動画（<code>.mp4</code>）の有効/無効、再生秒数、ウェイト、専用セリフを設定できます。</p>
+            </div>
+            <button class="btn btn-secondary" id="btn-add-video">＋ 新しい動画を追加</button>
+          </div>
+
+          <div id="video-settings-list" class="video-settings-list">
+            <!-- JSで動的生成 -->
+          </div>
+        </div>
+      </section>
+
+      <!-- タブ3: フォルダ・データ管理 -->
+      <section class="tab-pane" id="tab-folders">
+        <div class="card">
+          <div class="card-header">
+            <h3>アバター動画フォルダ</h3>
+          </div>
+          <p class="card-desc">
+            マスコットにオリジナルの動画（<code>.mp4</code>）を設定する場合は、以下の各フォルダに配置してください。
+          </p>
+
+          <div class="folder-actions">
+            <div class="folder-action-card">
+              <div class="folder-info">
+                <h4>基本アバター動画フォルダ</h4>
+                <p><code>idle.mp4</code>, <code>waking.mp4</code>, <code>working.mp4</code>, <code>making_something.mp4</code>, <code>milestone_level_up.mp4</code></p>
+              </div>
+              <button class="btn btn-primary" id="btn-open-avatars-dir">📂 フォルダを開く</button>
+            </div>
+
+            <div class="folder-action-card">
+              <div class="folder-info">
+                <h4>プラグイン動画フォルダ</h4>
+                <p>放置時に気まぐれ再生する動画（<code>meal.mp4</code>, <code>makeup.mp4</code>, <code>smartphone.mp4</code>, <code>sleeping.mp4</code> 等）</p>
+              </div>
+              <button class="btn btn-primary" id="btn-open-plugin-dir">📂 フォルダを開く</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="card danger-card">
+          <div class="card-header">
+            <h3>設定の初期化</h3>
+          </div>
+          <p class="card-desc">
+            タイマー設定およびセリフ設定をアプリ初期出荷状態（デフォルト値）へ戻します。
+          </p>
+          <button class="btn btn-danger" id="btn-reset-defaults">⚠️ 初期設定に戻す</button>
+        </div>
+      </section>
+    </main>
+
+    <!-- フッター -->
+    <footer class="settings-footer">
+      <div id="status-message" class="status-message"></div>
+      <div class="footer-buttons">
+        <button class="btn btn-secondary" id="btn-cancel">キャンセル</button>
+        <button class="btn btn-save" id="btn-save">💾 保存して適用</button>
+      </div>
+    </footer>
+  </div>
+
+  <script src="settings.js"></script>
+</body>
+</html>

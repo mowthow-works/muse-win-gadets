@@ -34,3 +34,12 @@
 - Git コミットはユーザーの動作確認・レビュー承認後に実施し、日本語のコミットメッセージに `(Closes #<Issue番号>)` を含めること。
 - `README.md` に記載された仕様・画面・設定に関連する変更を行った場合は、必ず `README.md`（および `dist/README.md`）を同期更新すること。
 - 公開ドキュメントやソースコード内にファイルパスを記載する場合は、リポジトリルートからの相対パスを記載すること。
+
+---
+
+## 4. ビルド・動作確認ルール（Debug vs Release）
+
+- **通常の開発・動作確認時**:
+  - ビルド時間の短縮のため、**Debug ビルド（`cargo build`）** で実施し、生成された `src-tauri/target/debug/muse-desktop-mascot.exe` を `dist/muse-desktop-mascot.exe` へ配置してユーザーへ動作確認を依頼すること（この段階での配布用 ZIP 作成は不要）。
+- **Release 時（ユーザーから「Releaseします！」と指示された時）**:
+  - 初めて **Release ビルド（`cargo build --release`）** を行い、最適化された `.exe` を `dist/` へ上書き配置し、配布用 ZIP アーカイブ（`muse-desktop-mascot-v*.zip`）を作成・更新すること。

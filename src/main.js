@@ -1158,6 +1158,10 @@ window.addEventListener('DOMContentLoaded', async () => {
     window.__TAURI__.event.listen('clear-unread', () => {
       clearUnreadBadge();
     });
+    // GUI設定画面で設定が保存された際のホットリロード即時反映 (Issue #13)
+    window.__TAURI__.event.listen('settings-updated', () => {
+      refreshPluginConfigs();
+    });
   }
 
   // 初期起動時は確実に未読バッジを非表示 (Issue #20)

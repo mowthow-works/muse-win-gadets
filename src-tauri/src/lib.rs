@@ -497,6 +497,119 @@ fn get_plugin_configs(app: AppHandle) -> Result<PluginConfigsPayload, String> {
 }
 
 #[tauri::command]
+fn save_plugin_configs(
+    app: AppHandle,
+    setting: serde_json::Value,
+    quotes: serde_json::Value,
+) -> Result<bool, String> {
+    let avatar_dirs = collect_avatar_dirs(&app);
+    let target_dir = if let Some(first) = avatar_dirs.first() {
+        first.clone()
+    } else if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            exe_dir.join("avatars")
+        } else {
+            PathBuf::from("avatars")
+        }
+    } else {
+        PathBuf::from("avatars")
+    };
+
+    let _ = fs::create_dir_all(&target_dir);
+    let setting_path = target_dir.join("setting.json");
+    let setting_str = serde_json::to_string_pretty(&setting)
+        .map_err(|e| format!("Failed to serialize setting: {}", e))?;
+    fs::write(&setting_path, setting_str)
+        .map_err(|e| format!("Failed to write setting.json: {}", e))?;
+
+    let plugin_dir = target_dir.join("plugin");
+    let _ = fs::create_dir_all(&plugin_dir);
+    let quotes_path = plugin_dir.join("quotes.json");
+    let quotes_str = serde_json::to_string_pretty(&quotes)
+        .map_err(|e| format!("Failed to serialize quotes: {}", e))?;
+    fs::write(&quotes_path, quotes_str)
+        .map_err(|e| format!("Failed to write quotes.json: {}", e))?;
+
+    // main ウィンドウへ設定更新イベントを発行
+    if let Some(main_win) = app.get_webview_window("main") {
+        let _ = main_win.emit("settings-updated", ());
+    }
+
+    Ok(true)
+}
+
+#[tauri::command]
+fn open_avatar_dir(app: AppHandle, target: String) -> Result<bool, String> {
+    let avatar_dirs = collect_avatar_dirs(&app);
+    let base_dir = if let Some(first) = avatar_dirs.first() {
+        first.clone()
+    } else if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            exe_dir.join("avatars")
+        } else {
+            PathBuf::from("avatars")
+        }
+    } else {
+        PathBuf::from("avatars")
+    };
+
+    let dir_to_open = if target == "plugin" {
+        base_dir.join("plugin")
+    } else {
+        base_dir
+    };
+
+    let _ = fs::create_dir_all(&dir_to_open);
+
+    #[cfg(target_os = "windows")]
+    {
+        let path_str = dir_to_open.to_string_lossy().to_string();
+        std::process::Command::new("explorer")
+            .arg(path_str)
+            .spawn()
+            .map_err(|e| format!("Failed to open explorer: {}", e))?;
+    }
+
+    Ok(true)
+}
+
+#[tauri::command]
+async fn open_settings_window(app: AppHandle) -> Result<bool, String> {
+    if let Some(win) = app.get_webview_window("settings") {
+        let _ = win.unminimize();
+        let _ = win.show();
+        let _ = win.set_focus();
+        return Ok(true);
+    }
+
+    let win = WebviewWindowBuilder::new(
+        &app,
+        "settings",
+        WebviewUrl::App("settings.html".into()),
+    )
+    .title("Muse Desktop Mascot - 設定")
+    .inner_size(640.0, 720.0)
+    .min_inner_size(480.0, 540.0)
+    .resizable(true)
+    .visible(true)
+    .center()
+    .build()
+    .map_err(|e| format!("Failed to create settings window: {}", e))?;
+
+    let _ = win.set_icon(tauri::include_image!("icons/128x128.png"));
+    let _ = win.set_focus();
+    Ok(true)
+}
+
+#[tauri::command]
+async fn close_settings_window(app: AppHandle) -> Result<bool, String> {
+    if let Some(win) = app.get_webview_window("settings") {
+        let _ = win.destroy();
+    }
+    Ok(true)
+}
+
+#[tauri::command]
 fn get_avatar_video_pack(app: AppHandle) -> Result<AvatarVideoPack, String> {
     let avatar_dirs = collect_avatar_dirs(&app);
 
@@ -1108,6 +1221,7 @@ pub fn run() {
             // システムトレイの初期化
             let toggle_app = MenuItem::with_id(handle, "toggle_app", "セッション画面 ⇄ マスコット (Ctrl+Shift+M)", true, None::<&str>)?;
             let open_session = MenuItem::with_id(handle, "open_session", "セッション画面を開く (公式UI)", true, None::<&str>)?;
+            let item_settings = MenuItem::with_id(handle, "open_settings", "設定...", true, None::<&str>)?;
             let item_open_mascot_devtools = MenuItem::with_id(handle, "open_mascot_devtools", "マスコットの開発者ツールを開く", true, None::<&str>)?;
             let item_open_session_devtools = MenuItem::with_id(handle, "open_devtools", "セッションの開発者ツールを開く", true, None::<&str>)?;
             let toggle_mascot = MenuItem::with_id(handle, "toggle_mascot", "マスコットモード (アバター単体)", true, None::<&str>)?;
@@ -1133,6 +1247,7 @@ pub fn run() {
                 &[
                     &toggle_app,
                     &open_session,
+                    &item_settings,
                     &item_open_mascot_devtools,
                     &item_open_session_devtools,
                     &toggle_mascot,
@@ -1159,6 +1274,12 @@ pub fn run() {
                         let app_clone = app.clone();
                         tauri::async_runtime::spawn(async move {
                             let _ = open_or_show_session(app_clone).await;
+                        });
+                    }
+                    "open_settings" => {
+                        let app_clone = app.clone();
+                        tauri::async_runtime::spawn(async move {
+                            let _ = open_settings_window(app_clone).await;
                         });
                     }
                     "open_mascot_devtools" => {
@@ -1294,6 +1415,10 @@ pub fn run() {
             get_avatar_data_url,
             get_avatar_video_pack,
             get_plugin_configs,
+            save_plugin_configs,
+            open_avatar_dir,
+            open_settings_window,
+            close_settings_window,
             get_avatar_state,
             get_chat_messages,
             inspect_latest_message,
