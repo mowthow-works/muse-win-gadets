@@ -1275,21 +1275,16 @@ async fn enter_mascot_mode(app: AppHandle) -> Result<String, String> {
         }
 
         let (mw, mh, _) = get_mascot_dimensions(&config.mascot_scale);
+        let scale_factor = win.scale_factor().unwrap_or(1.0);
+        let target_size = tauri::PhysicalSize::new((mw * scale_factor).round() as u32, (mh * scale_factor).round() as u32);
         let _ = win.set_size(LogicalSize::new(mw, mh));
         let saved_pos = get_last_mascot_pos().or(config.mascot_pos);
-        if let Some(pos) = saved_pos {
-            let _ = win.set_position(tauri::PhysicalPosition::new(pos.0, pos.1));
-            config.mascot_pos = Some(pos);
-        } else {
-            let default_pos = get_mascot_default_position(&win, &config.mascot_scale);
-            let scale_factor = win.scale_factor().unwrap_or(1.0);
-            let target_size = tauri::PhysicalSize::new((mw * scale_factor).round() as u32, (mh * scale_factor).round() as u32);
-            clamp_window_to_monitor(&win, Some(default_pos), Some(target_size));
-            if let Ok(new_pos) = win.outer_position() {
-                if new_pos.x > -10000 && new_pos.y > -10000 {
-                    set_last_mascot_pos((new_pos.x, new_pos.y));
-                    config.mascot_pos = Some((new_pos.x, new_pos.y));
-                }
+        let target_pos = saved_pos.unwrap_or_else(|| get_mascot_default_position(&win, &config.mascot_scale));
+        clamp_window_to_monitor(&win, Some(target_pos), Some(target_size));
+        if let Ok(new_pos) = win.outer_position() {
+            if new_pos.x > -10000 && new_pos.y > -10000 {
+                set_last_mascot_pos((new_pos.x, new_pos.y));
+                config.mascot_pos = Some((new_pos.x, new_pos.y));
             }
         }
     }
@@ -1503,18 +1498,35 @@ async fn open_in_browser(app: AppHandle) -> Result<(), String> {
 
 async fn restore_mascot_window(app: &AppHandle, focus: bool) {
     if let Some(main_win) = app.get_webview_window("main") {
-        let cfg = load_config_internal(app);
+        let mut cfg = load_config_internal(app);
         if cfg.size_mode != "mascot" {
             let _ = enter_mascot_mode(app.clone()).await;
+            cfg = load_config_internal(app);
         }
-        let target_pos = get_last_mascot_pos().or(cfg.mascot_pos);
+        let (mw, mh, _) = get_mascot_dimensions(&cfg.mascot_scale);
+        let scale_factor = main_win.scale_factor().unwrap_or(1.0);
+        let target_size = tauri::PhysicalSize::new((mw * scale_factor).round() as u32, (mh * scale_factor).round() as u32);
+        let _ = main_win.set_size(LogicalSize::new(mw, mh));
+
+        let target_pos = get_last_mascot_pos()
+            .or(cfg.mascot_pos)
+            .unwrap_or_else(|| get_mascot_default_position(&main_win, &cfg.mascot_scale));
+
         IS_RESTORING_MASCOT.store(true, Ordering::SeqCst);
-        if let Some(pos) = target_pos {
-            let _ = main_win.set_position(tauri::PhysicalPosition::new(pos.0, pos.1));
-        }
+        clamp_window_to_monitor(&main_win, Some(target_pos), Some(target_size));
         let _ = main_win.show();
-        if let Some(pos) = target_pos {
-            let _ = main_win.set_position(tauri::PhysicalPosition::new(pos.0, pos.1));
+        let _ = main_win.unminimize();
+        let _ = main_win.set_always_on_top(true);
+        clamp_window_to_monitor(&main_win, Some(target_pos), Some(target_size));
+        if let Ok(new_pos) = main_win.outer_position() {
+            if new_pos.x > -10000 && new_pos.y > -10000 {
+                set_last_mascot_pos((new_pos.x, new_pos.y));
+                update_config_internal(app, |c| {
+                    if c.size_mode == "mascot" {
+                        c.mascot_pos = Some((new_pos.x, new_pos.y));
+                    }
+                });
+            }
         }
         IS_RESTORING_MASCOT.store(false, Ordering::SeqCst);
         let _ = main_win.emit("session-visibility-changed", false);
@@ -1522,6 +1534,32 @@ async fn restore_mascot_window(app: &AppHandle, focus: bool) {
             let _ = main_win.set_focus();
         }
     }
+}
+
+#[tauri::command]
+async fn reset_mascot_position(app: AppHandle) -> Result<(), String> {
+    if let Some(main_win) = app.get_webview_window("main") {
+        let cfg = load_config_internal(&app);
+        let def_pos = get_mascot_default_position(&main_win, &cfg.mascot_scale);
+        let (mw, mh, _) = get_mascot_dimensions(&cfg.mascot_scale);
+        let scale_factor = main_win.scale_factor().unwrap_or(1.0);
+        let target_size = tauri::PhysicalSize::new((mw * scale_factor).round() as u32, (mh * scale_factor).round() as u32);
+        
+        IS_RESTORING_MASCOT.store(true, Ordering::SeqCst);
+        clamp_window_to_monitor(&main_win, Some(def_pos), Some(target_size));
+        let _ = main_win.show();
+        let _ = main_win.unminimize();
+        let _ = main_win.set_always_on_top(true);
+        if let Ok(new_pos) = main_win.outer_position() {
+            set_last_mascot_pos((new_pos.x, new_pos.y));
+            update_config_internal(&app, |c| {
+                c.mascot_pos = Some((new_pos.x, new_pos.y));
+            });
+        }
+        IS_RESTORING_MASCOT.store(false, Ordering::SeqCst);
+        let _ = main_win.set_focus();
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -1623,6 +1661,18 @@ async fn toggle_minimize_restore(app: AppHandle) -> Result<String, String> {
     if is_visible && is_focused && !is_minimized {
         let _ = hide_session(app).await;
         Ok("mascot".to_string())
+    } else if !is_visible {
+        // セッション非表示時: マスコットが最小化・非表示になっていたらマスコットを優先復帰
+        if let Some(main_win) = app.get_webview_window("main") {
+            let main_visible = main_win.is_visible().unwrap_or(false);
+            let main_minimized = main_win.is_minimized().unwrap_or(false);
+            if !main_visible || main_minimized {
+                restore_mascot_window(&app, true).await;
+                return Ok("mascot".to_string());
+            }
+        }
+        let _ = open_or_show_session(app).await;
+        Ok("session".to_string())
     } else {
         let _ = open_or_show_session(app).await;
         Ok("session".to_string())
@@ -1702,6 +1752,7 @@ pub fn run() {
             let item_open_mascot_devtools = MenuItem::with_id(handle, "open_mascot_devtools", "マスコットの開発者ツールを開く", true, None::<&str>)?;
             let item_open_session_devtools = MenuItem::with_id(handle, "open_devtools", "セッションの開発者ツールを開く", true, None::<&str>)?;
             let toggle_mascot = MenuItem::with_id(handle, "toggle_mascot", "マスコットモード (アバター単体)", true, None::<&str>)?;
+            let item_reset_pos = MenuItem::with_id(handle, "reset_mascot_pos", "マスコット位置を初期位置に戻す", true, None::<&str>)?;
 
             // スタートアップ自動起動の初期化 (Issue #22)
             let is_autostart = handle.autolaunch().is_enabled().unwrap_or(false);
@@ -1781,6 +1832,7 @@ pub fn run() {
                     &item_open_mascot_devtools,
                     &item_open_session_devtools,
                     &toggle_mascot,
+                    &item_reset_pos,
                     &sub_mascot_size,
                     &item_autostart,
                     &item_sound,
@@ -1828,7 +1880,14 @@ pub fn run() {
                     "toggle_mascot" => {
                         let app_clone = app.clone();
                         tauri::async_runtime::spawn(async move {
-                            let _ = hide_session(app_clone).await;
+                            let _ = hide_session(app_clone.clone()).await;
+                            restore_mascot_window(&app_clone, true).await;
+                        });
+                    }
+                    "reset_mascot_pos" => {
+                        let app_clone = app.clone();
+                        tauri::async_runtime::spawn(async move {
+                            let _ = reset_mascot_position(app_clone).await;
                         });
                     }
                     "toggle_autostart" => {
@@ -2024,6 +2083,7 @@ pub fn run() {
             toggle_size_mode,
             enter_mascot_mode,
             restore_from_mascot,
+            reset_mascot_position,
             set_mascot_scale,
             sync_mascot_bubble_direction,
             toggle_minimize_restore,
