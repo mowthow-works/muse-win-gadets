@@ -628,8 +628,15 @@ window.__MUSE_BRIDGE__ = {
 
     await new Promise(r => setTimeout(r, 180));
 
+    const isStopButton = (btn) => {
+      if (!btn) return false;
+      const label = (btn.getAttribute('aria-label') || btn.getAttribute('title') || btn.textContent || '').toLowerCase();
+      const cls = (btn.className || '').toLowerCase();
+      return label.includes('stop') || label.includes('停止') || label.includes('キャンセル') || label.includes('interrupt') || cls.includes('stop');
+    };
+
     const { el: sendBtn } = queryFirst(SELECTORS.sendButton);
-    if (sendBtn) {
+    if (sendBtn && !isStopButton(sendBtn)) {
       sendBtn.click();
     } else {
       ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
@@ -667,29 +674,73 @@ window.__MUSE_BRIDGE__ = {
         }
       }
 
+      // プログレスバー要素の属性（aria-valuenow や style="width: 50%" 等）から直接パーセントを検出
+      const progressBars = Array.from(document.querySelectorAll('[role="progressbar"], [class*="progress" i]'));
+      for (const bar of progressBars) {
+        const valNow = bar.getAttribute('aria-valuenow');
+        if (valNow !== null && !isNaN(parseInt(valNow, 10))) {
+          const p = Math.max(0, Math.min(100, parseInt(valNow, 10)));
+          remainingPercent = p;
+          usedPercent = 100 - p;
+          break;
+        }
+        const wMatch = (bar.getAttribute('style') || '').match(/width\s*:\s*(\d+(?:\.\d+)?)\s*%/i);
+        if (wMatch) {
+          const p = Math.round(parseFloat(wMatch[1]));
+          remainingPercent = p;
+          usedPercent = 100 - p;
+          break;
+        }
+      }
+
       const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
       let node;
       while ((node = walker.nextNode())) {
         const txt = (node.textContent || '').trim();
         if (!txt) continue;
 
+        // パターン①: "○% 使用済み" / "○% consumed"
         if (usedPercent === null) {
-          const matchUsed = txt.match(/(\d+)\s*%\s*使用済み/i);
+          const matchUsed = txt.match(/(\d+)\s*%\s*(?:使用済み|used|consumed)/i);
           if (matchUsed) {
             usedPercent = parseInt(matchUsed[1], 10);
-            remainingPercent = Math.max(0, 100 - usedPercent);
+            if (remainingPercent === null) {
+              remainingPercent = Math.max(0, 100 - usedPercent);
+            }
+          }
+        }
+
+        // パターン②: "残り ○%" / "残 ○%" / "○% 残り" / "○% remaining" / "○% left"
+        if (remainingPercent === null) {
+          const matchRem1 = txt.match(/(?:残り|残|remaining|left)\s*[:：]?\s*(\d+)\s*%/i);
+          const matchRem2 = txt.match(/(\d+)\s*%\s*(?:残り|残|remaining|left)/i);
+          if (matchRem1) {
+            remainingPercent = parseInt(matchRem1[1], 10);
+            if (usedPercent === null) usedPercent = Math.max(0, 100 - remainingPercent);
+          } else if (matchRem2) {
+            remainingPercent = parseInt(matchRem2[1], 10);
+            if (usedPercent === null) usedPercent = Math.max(0, 100 - remainingPercent);
+          }
+        }
+
+        // パターン③: "Limit" / "5-Hour" / "Weekly" の周辺テキストに含まれるパーセント
+        if (remainingPercent === null && usedPercent === null) {
+          const matchLimit = txt.match(/(?:\bLimit\b|5-Hour|Weekly)[^%\d]*(\d+)\s*%/i);
+          if (matchLimit) {
+            remainingPercent = parseInt(matchLimit[1], 10);
+            usedPercent = Math.max(0, 100 - remainingPercent);
           }
         }
 
         if (!resetText) {
-          const matchReset = txt.match(/(\d+週間の上限は[^\n。]*リセットされます|\d+月\d+日にリセットされます)/);
+          const matchReset = txt.match(/(\d+週間の上限は[^\n。]*リセットされます|\d+月\d+日にリセットされます|リセット\s*[:：]?\s*\d+時間\s*\d+分)/);
           if (matchReset) {
             resetText = matchReset[1].trim();
           }
         }
       }
 
-      if (usedPercent !== null || planName || resetText) {
+      if (remainingPercent !== null || usedPercent !== null || planName || resetText) {
         return {
           plan_name: planName || '無料プラン',
           used_percent: usedPercent,
@@ -702,13 +753,14 @@ window.__MUSE_BRIDGE__ = {
 
     // 1. まず現在の画面でスキャン
     const immediate = scanDomForLimit();
-    if (immediate && immediate.used_percent !== null) {
+    if (immediate && (immediate.remaining_percent !== null || immediate.used_percent !== null)) {
       window.__MUSE_CACHED_LIMIT__ = immediate;
       return immediate;
     }
 
-    // ガードレール①: session WebView が可視中 (passiveOnly === true) の場合は自動遷移しない
-    if (passiveOnly) {
+    // ガードレール①: session WebView が可視中、またはAIが回答生成中の場合は自動遷移・Escape送信を抑止 (Issue #34)
+    const isGenerating = !!document.querySelector('button[aria-label*="停止" i], button[aria-label*="stop" i], button[title*="停止" i], button[title*="stop" i]');
+    if (passiveOnly || isGenerating) {
       return window.__MUSE_CACHED_LIMIT__ || immediate || {
         plan_name: '無料プラン',
         used_percent: null,

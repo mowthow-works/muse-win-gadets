@@ -416,10 +416,12 @@ function toggleMascotInput() {
 }
 
 async function sendMascotQuickMessage() {
+  if (isSendingMessage) return;
   if (!mascotInputField) return;
   const text = mascotInputField.value.trim();
   if (!text) return;
 
+  isSendingMessage = true;
   closeMascotInput();
   recordInteraction();
   setAvatarState('working');
@@ -437,6 +439,7 @@ async function sendMascotQuickMessage() {
     try {
       window.focus();
     } catch (_) {}
+    setTimeout(() => { isSendingMessage = false; }, 800);
     // 返答受信のため、段階的に再取得
     setTimeout(loadChatMessages, 800);
     setTimeout(loadChatMessages, 1800);
@@ -488,6 +491,10 @@ function commitPendingAssistantMessage() {
   recordInteraction();
   // 回答完了の歓喜ポーズ（6秒間）
   setAvatarState('milestone_level_up', { durationMs: 6000, force: true, lockDuration: true });
+  // 会話返答完了に伴い、最新の利用枠を自動再取得 (Issue #33)
+  setTimeout(() => {
+    loadUsageLimit(true);
+  }, 2000);
   // ただしセッション画面表示中はカタカタ音・吹き出し再生を抑止 (Issue #29)
   if (document.body.classList.contains('mode-mascot') && !isSessionVisible) {
     playLupinTyping(textToPlay);
@@ -568,6 +575,7 @@ let lastPickedPluginKey = null;
 let currentAvatarState = 'idle';
 let currentActiveSlot = 'a'; // 'a' or 'b'
 let avatarTransitionSeq = 0; // スロット切り替え競合防止シーケンス (Issue #31)
+let isSendingMessage = false; // 送信中連打・二重送信ロック (Issue #34)
 let stateTimer = null;
 let isSpecialActionLocked = false;
 let specialActionTimer = null;
@@ -1614,6 +1622,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     });
     mascotInputField.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') {
+        if (e.isComposing) return;
         e.preventDefault();
         sendMascotQuickMessage();
       } else if (e.key === 'Escape') {
@@ -1652,6 +1661,9 @@ window.addEventListener('DOMContentLoaded', async () => {
       if (isSessionVisible) {
         hideMascotBubble();
         clearUnreadBadge();
+      } else {
+        // セッション画面からマスコット画面に戻った瞬間、最新の利用枠を自動取得 (Issue #33)
+        loadUsageLimit(true);
       }
     });
     // GUI設定画面で設定が保存された際のホットリロード即時反映 (Issue #13)
@@ -1681,6 +1693,7 @@ window.addEventListener('DOMContentLoaded', async () => {
 
   chatInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
+      if (e.isComposing) return;
       e.preventDefault();
       handleSendMessage();
     }

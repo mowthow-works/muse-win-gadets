@@ -978,15 +978,25 @@ async fn get_usage_limit(
     if !force {
         let config = load_config_internal(&app);
         if let Some(mut info) = config.last_limit_info {
-            if info.used_percent.is_some() {
-                if info.reset_text.contains("mp4") || info.reset_text.contains("KB") {
-                    info.reset_text = "1週間の上限は11月6日にリセットされます".to_string();
-                    let fixed = info.clone();
-                    update_config_internal(&app, |cfg| {
-                        cfg.last_limit_info = Some(fixed);
-                    });
+            if info.used_percent.is_some() || info.remaining_percent.is_some() {
+                // キャッシュのTTLチェック (2分以内ならキャッシュ有効、それ以上経過していたら自動再取得)
+                let is_fresh = chrono::NaiveDateTime::parse_from_str(&format!("{}:00", info.updated_at), "%Y-%m-%d %H:%M:%S")
+                    .map(|dt| {
+                        let now = Local::now().naive_local();
+                        now.signed_duration_since(dt).num_seconds() < 120
+                    })
+                    .unwrap_or(false);
+
+                if is_fresh {
+                    if info.reset_text.contains("mp4") || info.reset_text.contains("KB") {
+                        info.reset_text = "1週間の上限は11月6日にリセットされます".to_string();
+                        let fixed = info.clone();
+                        update_config_internal(&app, |cfg| {
+                            cfg.last_limit_info = Some(fixed);
+                        });
+                    }
+                    return Ok(info);
                 }
-                return Ok(info);
             }
         }
     }
@@ -1008,15 +1018,22 @@ async fn get_usage_limit(
         .unwrap_or("無料プラン")
         .to_string();
 
-    let used_percent = res
+    let mut used_percent = res
         .get("used_percent")
         .and_then(|v| v.as_u64())
         .map(|v| v as u32);
 
-    let remaining_percent = res
+    let mut remaining_percent = res
         .get("remaining_percent")
         .and_then(|v| v.as_u64())
         .map(|v| v as u32);
+
+    // used_percent と remaining_percent の相互自動補完 (Issue #33)
+    if remaining_percent.is_none() && used_percent.is_some() {
+        remaining_percent = Some(100u32.saturating_sub(used_percent.unwrap()));
+    } else if used_percent.is_none() && remaining_percent.is_some() {
+        used_percent = Some(100u32.saturating_sub(remaining_percent.unwrap()));
+    }
 
     let reset_text = res
         .get("reset_text")
@@ -1034,7 +1051,7 @@ async fn get_usage_limit(
         updated_at: now_str.clone(),
     };
 
-    if info.used_percent.is_some() {
+    if info.used_percent.is_some() || info.remaining_percent.is_some() {
         let saved = info.clone();
         update_config_internal(&app, |cfg| {
             cfg.last_limit_info = Some(saved);
