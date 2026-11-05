@@ -275,6 +275,10 @@ function startTypingLoop(text) {
   const delay = Math.min(24, Math.max(10, Math.floor(1600 / Math.max(1, text.length))));
 
   typingTimer = setInterval(() => {
+    if (isSessionVisible) {
+      hideMascotBubble();
+      return;
+    }
     if (currentTypingIdx < currentTypingTargetText.length) {
       const char = currentTypingTargetText[currentTypingIdx];
       mascotBubbleText.textContent += char;
@@ -301,6 +305,7 @@ function startTypingLoop(text) {
 }
 
 function playLupinTyping(text) {
+  if (isSessionVisible) return;
   if (!mascotBubble || !mascotBubbleText) return;
   closeMascotInput();
   const cleanedText = cleanMascotMessageText(text);
@@ -476,7 +481,8 @@ function commitPendingAssistantMessage() {
   recordInteraction();
   // 回答完了の歓喜ポーズ（6秒間）
   setAvatarState('milestone_level_up', { durationMs: 6000, force: true, lockDuration: true });
-  if (document.body.classList.contains('mode-mascot')) {
+  // ただしセッション画面表示中はカタカタ音・吹き出し再生を抑止 (Issue #29)
+  if (document.body.classList.contains('mode-mascot') && !isSessionVisible) {
     playLupinTyping(textToPlay);
   }
 
@@ -939,7 +945,7 @@ function setAvatarState(targetState, options = {}) {
 
 // 放置時間・時間帯に応じた「気まぐれアクション（plugin フォルダ内動画の条件付きランダムピックアップ）」
 function checkIdleAction() {
-  if (currentAvatarState !== 'idle' || isSpecialActionLocked) {
+  if (isSessionVisible || currentAvatarState !== 'idle' || isSpecialActionLocked) {
     return;
   }
 
@@ -1075,7 +1081,8 @@ async function loadChatMessages() {
           recordInteraction();
 
           // マスコットモード時は即座に吹き出しに最新返答テキストを表示（「考え中…」から最新回答へ即座に更新・シームレス追記）
-          if (document.body.classList.contains('mode-mascot')) {
+          // ただしセッション画面表示中はカタカタ音・吹き出し再生を抑止 (Issue #29)
+          if (document.body.classList.contains('mode-mascot') && !isSessionVisible) {
             playLupinTyping(latestAssistant);
           }
 
@@ -1263,6 +1270,7 @@ async function toggleSessionWindow() {
       await invoke('hide_session');
       isSessionVisible = false;
     } else {
+      hideMascotBubble();
       await invoke('open_or_show_session');
       isSessionVisible = true;
     }
@@ -1306,7 +1314,9 @@ async function enterMascotMode() {
 
 async function restoreFromMascot() {
   try {
+    hideMascotBubble();
     clearUnreadBadge();
+    isSessionVisible = true;
     // 中・小画面の代わりにセッションウィンドウ（公式画面）を前面表示
     await invoke('open_or_show_session');
   } catch (err) {
@@ -1582,10 +1592,19 @@ window.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
-  // セッション画面が前面化・開かれた際の未読クリアイベントを受信 (Issue #20)
+  // セッション画面が前面化・開かれた際の未読クリアイベントを受信 (Issue #20, Issue #29)
   if (window.__TAURI__ && window.__TAURI__.event && typeof window.__TAURI__.event.listen === 'function') {
     window.__TAURI__.event.listen('clear-unread', () => {
+      isSessionVisible = true;
+      hideMascotBubble();
       clearUnreadBadge();
+    });
+    window.__TAURI__.event.listen('session-visibility-changed', (event) => {
+      isSessionVisible = !!event.payload;
+      if (isSessionVisible) {
+        hideMascotBubble();
+        clearUnreadBadge();
+      }
     });
     // GUI設定画面で設定が保存された際のホットリロード即時反映 (Issue #13)
     window.__TAURI__.event.listen('settings-updated', () => {

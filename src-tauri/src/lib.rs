@@ -383,6 +383,7 @@ fn ensure_session_window(app: &AppHandle) -> Result<WebviewWindow, String> {
                 tauri::async_runtime::spawn(async move {
                     if let Some(main_win) = h.get_webview_window("main") {
                         let _ = main_win.emit("clear-unread", ());
+                        let _ = main_win.emit("session-visibility-changed", true);
                         if main_win.is_visible().unwrap_or(false) && !main_win.is_minimized().unwrap_or(false) {
                             if let Ok(pos) = main_win.outer_position() {
                                 if pos.x > -10000 && pos.y > -10000 {
@@ -1511,6 +1512,7 @@ async fn restore_mascot_window(app: &AppHandle, focus: bool) {
             let _ = main_win.set_position(tauri::PhysicalPosition::new(pos.0, pos.1));
         }
         IS_RESTORING_MASCOT.store(false, Ordering::SeqCst);
+        let _ = main_win.emit("session-visibility-changed", false);
         if focus {
             let _ = main_win.set_focus();
         }
@@ -1524,6 +1526,7 @@ async fn open_or_show_session(app: AppHandle) -> Result<SessionStatus, String> {
     // セッション表示時はマスコットへ未読クリアを通知し、現在位置を保存して非表示にする
     if let Some(main_win) = app.get_webview_window("main") {
         let _ = main_win.emit("clear-unread", ());
+        let _ = main_win.emit("session-visibility-changed", true);
         if main_win.is_visible().unwrap_or(false) && !main_win.is_minimized().unwrap_or(false) {
             if let Ok(pos) = main_win.outer_position() {
                 if pos.x > -10000 && pos.y > -10000 {
