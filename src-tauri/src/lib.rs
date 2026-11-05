@@ -378,9 +378,14 @@ fn ensure_session_window(app: &AppHandle) -> Result<WebviewWindow, String> {
                 }
             }
             tauri::WindowEvent::Focused(true) => {
-                // セッション画面が表に出た（フォーカス獲得）: マスコットへ未読クリアを通知し、現在位置を保存して非表示にする
+                // セッション画面が表に出た（フォーカス獲得）: 実際に可視状態の場合のみマスコットへ通知
                 let h = handle_for_session.clone();
                 tauri::async_runtime::spawn(async move {
+                    if let Some(s) = h.get_webview_window("session") {
+                        if !s.is_visible().unwrap_or(false) || s.is_minimized().unwrap_or(false) {
+                            return;
+                        }
+                    }
                     if let Some(main_win) = h.get_webview_window("main") {
                         let _ = main_win.emit("clear-unread", ());
                         let _ = main_win.emit("session-visibility-changed", true);

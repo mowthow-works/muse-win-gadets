@@ -27,6 +27,18 @@ const dragHeader = document.getElementById('drag-header');
 const avatarContainer = document.getElementById('avatar-container');
 const avatarVideoA = document.getElementById('avatar-video-a');
 const avatarVideoB = document.getElementById('avatar-video-b');
+
+// <video> 要素のエラー検知と自律復旧リスナー (Issue #31)
+[avatarVideoA, avatarVideoB].forEach((videoEl, idx) => {
+  if (videoEl) {
+    videoEl.addEventListener('error', (e) => {
+      console.error(`avatarVideo${idx === 0 ? 'A' : 'B'} error:`, e);
+      setTimeout(() => {
+        loadAvatar(true);
+      }, 500);
+    });
+  }
+});
 const avatarFallback = document.getElementById('avatar-fallback');
 const btnFetchAvatar = document.getElementById('btn-fetch-avatar');
 const avatarNameEl = document.getElementById('avatar-name');
@@ -275,10 +287,6 @@ function startTypingLoop(text) {
   const delay = Math.min(24, Math.max(10, Math.floor(1600 / Math.max(1, text.length))));
 
   typingTimer = setInterval(() => {
-    if (isSessionVisible) {
-      hideMascotBubble();
-      return;
-    }
     if (currentTypingIdx < currentTypingTargetText.length) {
       const char = currentTypingTargetText[currentTypingIdx];
       mascotBubbleText.textContent += char;
@@ -305,7 +313,6 @@ function startTypingLoop(text) {
 }
 
 function playLupinTyping(text) {
-  if (isSessionVisible) return;
   if (!mascotBubble || !mascotBubbleText) return;
   closeMascotInput();
   const cleanedText = cleanMascotMessageText(text);
@@ -560,6 +567,7 @@ let pluginItems = [];
 let lastPickedPluginKey = null;
 let currentAvatarState = 'idle';
 let currentActiveSlot = 'a'; // 'a' or 'b'
+let avatarTransitionSeq = 0; // スロット切り替え競合防止シーケンス (Issue #31)
 let stateTimer = null;
 let isSpecialActionLocked = false;
 let specialActionTimer = null;
@@ -920,26 +928,66 @@ function setAvatarState(targetState, options = {}) {
 
   currentAvatarState = targetState;
 
-  // スロットの切り替え（A <-> B）で 500ms クロスフェード
-  const incomingSlot = currentActiveSlot === 'a' ? avatarVideoB : avatarVideoA;
-  const outgoingSlot = currentActiveSlot === 'a' ? avatarVideoA : avatarVideoB;
+  // スロット切り替え（A <-> B）500ms クロスフェード (Issue #31 競合・黒画面対策)
+  const nextSlotId = currentActiveSlot === 'a' ? 'b' : 'a';
+  const incomingSlot = nextSlotId === 'b' ? avatarVideoB : avatarVideoA;
+  const outgoingSlot = nextSlotId === 'b' ? avatarVideoA : avatarVideoB;
+
+  currentActiveSlot = nextSlotId;
+  const thisSeq = ++avatarTransitionSeq;
 
   if (incomingSlot) {
     if (incomingSlot.src !== newSrc) {
       incomingSlot.src = newSrc;
+      incomingSlot.currentTime = 0;
     }
     incomingSlot.classList.remove('hidden');
-    const onPlayReady = () => {
+
+    const finalizeCrossFade = () => {
+      // 最新の切り替え要求でない場合は何もしない（古い完了コールバックによる誤消去を防止）
+      if (thisSeq !== avatarTransitionSeq) return;
+
       incomingSlot.classList.add('active');
-      if (outgoingSlot) {
+      if (outgoingSlot && outgoingSlot !== incomingSlot) {
         outgoingSlot.classList.remove('active');
       }
-      currentActiveSlot = currentActiveSlot === 'a' ? 'b' : 'a';
+      ensureActiveAvatarSlot();
     };
 
-    incomingSlot.play().then(onPlayReady).catch(() => {
-      onPlayReady();
-    });
+    incomingSlot.play()
+      .then(() => {
+        // 再生が開始されたらフェードイン・アウト実行
+        finalizeCrossFade();
+      })
+      .catch((err) => {
+        console.warn('incomingSlot.play error:', err);
+        // 再生失敗時、もし最新リクエストならフェールセーフ実行
+        if (thisSeq === avatarTransitionSeq) {
+          finalizeCrossFade();
+        }
+      });
+  } else {
+    ensureActiveAvatarSlot();
+  }
+}
+
+// 万一スロットA・Bの両方から .active が外れて真っ黒になるのを防ぐ自己修復ガード (Issue #31)
+function ensureActiveAvatarSlot() {
+  if (!avatarVideoA || !avatarVideoB) return;
+  const aActive = avatarVideoA.classList.contains('active');
+  const bActive = avatarVideoB.classList.contains('active');
+
+  // 両方とも active が外れている（画面が真っ黒になっている）場合
+  if (!aActive && !bActive) {
+    console.warn('ensureActiveAvatarSlot: Both slots inactive! Restoring active slot...');
+    const targetSlot = currentActiveSlot === 'b' ? avatarVideoB : avatarVideoA;
+    targetSlot.classList.add('active');
+    targetSlot.classList.remove('hidden');
+    targetSlot.play().catch(() => {});
+  } else if (aActive && bActive) {
+    // 両方 active のまま残っている場合は古い方を安全にフェードアウト
+    const staleSlot = currentActiveSlot === 'a' ? avatarVideoB : avatarVideoA;
+    staleSlot.classList.remove('active');
   }
 }
 
@@ -1702,9 +1750,11 @@ window.addEventListener('DOMContentLoaded', async () => {
   // 3秒ごとのリアルタイム動作状態・チャット同期 ＆ 設定ホットリロード・放置監視
   setInterval(async () => {
     await refreshPluginConfigs();
+    await updateSessionStatus(); // セッション開閉状態の同期
     await loadChatMessages();
     await syncAvatarStateWithMuse();
     checkIdleAction();
+    ensureActiveAvatarSlot(); // 定期自己修復チェック (Issue #31)
   }, 3000);
 
   // 12 秒ごとの自動バックグラウンド同期（チャット＆ヘルスチェック）
