@@ -6,5 +6,15 @@
   "bubble_display_duration_sec": 30,
   "avoid_repeat_video": true,
   "sound_enabled": true,
-  "sound_volume": 30
+  "sound_volume": 30,
+  "live_quotes": {
+    "enabled": false,
+    "target_mode": "main",
+    "custom_chat_url": "",
+    "batch_count": 4,
+    "min_interval_min": 60,
+    "daily_limit": 6,
+    "quiet_hours_start": "22:00",
+    "quiet_hours_end": "07:00"
+  }
 }

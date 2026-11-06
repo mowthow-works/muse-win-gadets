@@ -108,6 +108,29 @@ const btnAddEveningQuote = document.getElementById('btn-add-evening-quote');
 const nightQuotesListEl = document.getElementById('night-quotes-list');
 const btnAddNightQuote = document.getElementById('btn-add-night-quote');
 
+// ライブつぶやき生成（ウェイク方式）要素 (Issue #37)
+const liveQuotesEnabled = document.getElementById('live-quotes-enabled');
+const liveQuotesTargetRadios = document.querySelectorAll('input[name="live-quotes-target-mode"]');
+const liveQuotesCustomUrlGroup = document.getElementById('live-quotes-custom-url-group');
+const liveQuotesCustomUrl = document.getElementById('live-quotes-custom-url');
+const liveQuotesBatchCount = document.getElementById('live-quotes-batch-count');
+const liveQuotesMinInterval = document.getElementById('live-quotes-min-interval');
+const liveQuotesDailyLimit = document.getElementById('live-quotes-daily-limit');
+const liveQuotesQuietStart = document.getElementById('live-quotes-quiet-start');
+const liveQuotesQuietEnd = document.getElementById('live-quotes-quiet-end');
+
+function updateLiveQuotesCustomUrlVisibility() {
+  const checked = document.querySelector('input[name="live-quotes-target-mode"]:checked');
+  const isCustom = checked && checked.value === 'custom';
+  if (liveQuotesCustomUrlGroup) {
+    liveQuotesCustomUrlGroup.style.display = isCustom ? 'flex' : 'none';
+  }
+}
+
+liveQuotesTargetRadios.forEach(radio => {
+  radio.addEventListener('change', updateLiveQuotesCustomUrlVisibility);
+});
+
 const videoSettingsList = document.getElementById('video-settings-list');
 const btnAddVideo = document.getElementById('btn-add-video');
 const btnOpenAvatarsDir = document.getElementById('btn-open-avatars-dir');
@@ -313,6 +336,20 @@ async function loadConfigs() {
     const vol = currentSetting.sound_volume ?? 30;
     if (inputSoundVolume) inputSoundVolume.value = vol;
     if (soundVolumeDisplay) soundVolumeDisplay.textContent = `${vol}%`;
+
+    // ライブつぶやき生成（ウェイク方式）のバインド (Issue #37)
+    const lq = currentSetting.live_quotes || {};
+    if (liveQuotesEnabled) liveQuotesEnabled.checked = lq.enabled === true;
+    const targetMode = lq.target_mode === 'custom' ? 'custom' : 'main';
+    const targetModeRadio = document.querySelector(`input[name="live-quotes-target-mode"][value="${targetMode}"]`);
+    if (targetModeRadio) targetModeRadio.checked = true;
+    updateLiveQuotesCustomUrlVisibility();
+    if (liveQuotesCustomUrl) liveQuotesCustomUrl.value = lq.custom_chat_url || '';
+    if (liveQuotesBatchCount) liveQuotesBatchCount.value = lq.batch_count ?? 4;
+    if (liveQuotesMinInterval) liveQuotesMinInterval.value = lq.min_interval_min ?? 60;
+    if (liveQuotesDailyLimit) liveQuotesDailyLimit.value = lq.daily_limit ?? 6;
+    if (liveQuotesQuietStart) liveQuotesQuietStart.value = lq.quiet_hours_start || '22:00';
+    if (liveQuotesQuietEnd) liveQuotesQuietEnd.value = lq.quiet_hours_end || '07:00';
 
     // マスコット表示サイズ（スケール）のバインド (Issue #25)
     try {
@@ -546,6 +583,17 @@ btnResetDefaults.addEventListener('click', () => {
   if (inputSoundVolume) inputSoundVolume.value = 30;
   if (soundVolumeDisplay) soundVolumeDisplay.textContent = '30%';
 
+  if (liveQuotesEnabled) liveQuotesEnabled.checked = false;
+  const mainTargetRadio = document.querySelector('input[name="live-quotes-target-mode"][value="main"]');
+  if (mainTargetRadio) mainTargetRadio.checked = true;
+  updateLiveQuotesCustomUrlVisibility();
+  if (liveQuotesCustomUrl) liveQuotesCustomUrl.value = '';
+  if (liveQuotesBatchCount) liveQuotesBatchCount.value = 4;
+  if (liveQuotesMinInterval) liveQuotesMinInterval.value = 60;
+  if (liveQuotesDailyLimit) liveQuotesDailyLimit.value = 6;
+  if (liveQuotesQuietStart) liveQuotesQuietStart.value = '22:00';
+  if (liveQuotesQuietEnd) liveQuotesQuietEnd.value = '07:00';
+
   const stdRadio = document.querySelector('input[name="mascot-scale"][value="standard"]');
   if (stdRadio) {
     stdRadio.checked = true;
@@ -691,6 +739,18 @@ btnSave.addEventListener('click', async () => {
     currentSetting.touch_reaction_duration_sec = parseInt(inputTouchDuration.value, 10) || 8;
     currentSetting.sound_enabled = toggleSoundEnabled ? toggleSoundEnabled.checked : true;
     currentSetting.sound_volume = inputSoundVolume ? parseInt(inputSoundVolume.value, 10) : 30;
+
+    const checkedTargetMode = document.querySelector('input[name="live-quotes-target-mode"]:checked');
+    currentSetting.live_quotes = {
+      enabled: liveQuotesEnabled ? liveQuotesEnabled.checked : false,
+      target_mode: checkedTargetMode ? checkedTargetMode.value : 'main',
+      custom_chat_url: liveQuotesCustomUrl ? liveQuotesCustomUrl.value.trim() : '',
+      batch_count: Math.max(1, Math.min(10, parseInt(liveQuotesBatchCount?.value, 10) || 4)),
+      min_interval_min: Math.max(10, parseInt(liveQuotesMinInterval?.value, 10) || 60),
+      daily_limit: Math.max(1, parseInt(liveQuotesDailyLimit?.value, 10) || 6),
+      quiet_hours_start: (liveQuotesQuietStart?.value || '22:00').trim() || '22:00',
+      quiet_hours_end: (liveQuotesQuietEnd?.value || '07:00').trim() || '07:00'
+    };
 
     await invoke('save_plugin_configs', {
       setting: currentSetting,

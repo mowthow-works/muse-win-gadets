@@ -501,6 +501,13 @@ window.__MUSE_BRIDGE__ = {
 
       const { el: bubbleEl } = queryFirst(SELECTORS.messageBubble, el);
       let rawText = bubbleEl ? (bubbleEl.innerText || '') : rawElText;
+      if (!isUser) {
+        const mascotCodeEl = (bubbleEl || el).querySelector('code[class*="mascot-quotes" i], pre[class*="mascot-quotes" i], [data-language="mascot-quotes" i]');
+        if (mascotCodeEl && !rawText.includes('mascot-quotes')) {
+          const fence = '\x60\x60\x60';
+          rawText = fence + 'mascot-quotes\n' + (mascotCodeEl.innerText || mascotCodeEl.textContent || '') + '\n' + fence;
+        }
+      }
 
       const text = rawText
         .replace(/^(自分:|アシスタントメッセージ:)\s*/i, '')

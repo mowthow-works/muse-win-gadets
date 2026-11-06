@@ -488,6 +488,15 @@ function commitPendingAssistantMessage() {
   const isExtension = !!(lastCommittedAssistantText && textToPlay.startsWith(lastCommittedAssistantText));
   lastSeenAssistantText = textToPlay;
   lastCommittedAssistantText = textToPlay;
+  if (isLiveQuotesResponse(textToPlay)) {
+    pendingAssistantText = null;
+    extractAndStoreLiveQuotes(textToPlay);
+    isWakingForLiveQuotes = false;
+    setTimeout(() => {
+      loadUsageLimit(true);
+    }, 2000);
+    return;
+  }
   pendingAssistantText = null;
 
   recordInteraction();
@@ -593,11 +602,295 @@ let pluginSettings = {
   bubble_display_duration_sec: 30,
   avoid_repeat_video: true,
   sound_enabled: true,
-  sound_volume: 30
+  sound_volume: 30,
+  live_quotes: {
+    enabled: false,
+    target_mode: 'main',
+    custom_chat_url: '',
+    batch_count: 4,
+    min_interval_min: 60,
+    daily_limit: 6,
+    quiet_hours_start: '22:00',
+    quiet_hours_end: '07:00'
+  }
 };
 
 // quotes.json の動画別設定マップ（ホットリロード対応）
 let videoQuotesConfigMap = {};
+
+// ==========================================
+// ライブつぶやき生成（ウェイク方式）プール管理 (Issue #37)
+// ==========================================
+const LIVE_QUOTES_FENCE = '\x60\x60\x60';
+let liveQuotesPool = {
+  items: [],
+  updated_at: '',
+  last_wake_at: 0,
+  daily_wake_date: '',
+  daily_wake_count: 0,
+  recent_shown: []
+};
+let isWakingForLiveQuotes = false;
+let latestMuseSyncedState = 'idle';
+
+function getTodayDateString() {
+  const d = new Date();
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function pruneExpiredLiveQuotes() {
+  if (!Array.isArray(liveQuotesPool.items)) {
+    liveQuotesPool.items = [];
+    return;
+  }
+  const now = Date.now();
+  const maxAgeMs = 24 * 3600 * 1000;
+  liveQuotesPool.items = liveQuotesPool.items.filter(item => {
+    if (!item || typeof item.text !== 'string' || !item.text.trim()) return false;
+    const createdAt = Number(item.created_at) || 0;
+    return createdAt > 0 && (now - createdAt) <= maxAgeMs;
+  });
+}
+
+async function loadLiveQuotesPool() {
+  try {
+    const data = await invoke('get_live_quotes');
+    if (data && typeof data === 'object') {
+      liveQuotesPool.items = Array.isArray(data.items) ? data.items : [];
+      liveQuotesPool.updated_at = typeof data.updated_at === 'string' ? data.updated_at : '';
+      liveQuotesPool.last_wake_at = Number(data.last_wake_at) || 0;
+      liveQuotesPool.daily_wake_date = typeof data.daily_wake_date === 'string' ? data.daily_wake_date : '';
+      liveQuotesPool.daily_wake_count = Number(data.daily_wake_count) || 0;
+      liveQuotesPool.recent_shown = Array.isArray(data.recent_shown) ? data.recent_shown.slice(-10) : [];
+    }
+    const today = getTodayDateString();
+    if (liveQuotesPool.daily_wake_date !== today) {
+      liveQuotesPool.daily_wake_date = today;
+      liveQuotesPool.daily_wake_count = 0;
+    }
+    pruneExpiredLiveQuotes();
+  } catch (err) {
+    console.warn('loadLiveQuotesPool error:', err);
+  }
+}
+
+async function saveLiveQuotesPool() {
+  try {
+    liveQuotesPool.updated_at = new Date().toISOString();
+    await invoke('save_live_quotes', { payload: liveQuotesPool });
+  } catch (err) {
+    console.warn('saveLiveQuotesPool error:', err);
+  }
+}
+
+function consumeOneLiveQuote() {
+  pruneExpiredLiveQuotes();
+  if (!liveQuotesPool.items || liveQuotesPool.items.length === 0) {
+    return null;
+  }
+
+  const slot = getCurrentTimeSlot();
+  const recentSet = new Set(Array.isArray(liveQuotesPool.recent_shown) ? liveQuotesPool.recent_shown : []);
+
+  // 1. 現在の時間帯に一致し、直近表示していないものを最優先
+  let chosenIdx = liveQuotesPool.items.findIndex(item => item.time_slot === slot && !recentSet.has(item.text));
+  // 2. 現在の時間帯に一致するもの
+  if (chosenIdx === -1) {
+    chosenIdx = liveQuotesPool.items.findIndex(item => item.time_slot === slot);
+  }
+  // 3. 直近表示していない任意のもの
+  if (chosenIdx === -1) {
+    chosenIdx = liveQuotesPool.items.findIndex(item => !recentSet.has(item.text));
+  }
+  // 4. 先頭要素
+  if (chosenIdx === -1) {
+    chosenIdx = 0;
+  }
+
+  const [chosen] = liveQuotesPool.items.splice(chosenIdx, 1);
+  if (!chosen || !chosen.text) return null;
+
+  if (!Array.isArray(liveQuotesPool.recent_shown)) {
+    liveQuotesPool.recent_shown = [];
+  }
+  liveQuotesPool.recent_shown.push(chosen.text);
+  if (liveQuotesPool.recent_shown.length > 10) {
+    liveQuotesPool.recent_shown = liveQuotesPool.recent_shown.slice(-10);
+  }
+
+  saveLiveQuotesPool();
+  return chosen.text;
+}
+
+function isLiveQuotesResponse(text) {
+  if (!text || typeof text !== 'string') return false;
+  if (/mascot-quotes/i.test(text)) return true;
+  if (isWakingForLiveQuotes && (Date.now() - (Number(liveQuotesPool.last_wake_at) || 0) < 90000)) {
+    return true;
+  }
+  return false;
+}
+
+function extractAndStoreLiveQuotes(text) {
+  if (!text || typeof text !== 'string') return 0;
+  pruneExpiredLiveQuotes();
+
+  let bodyText = '';
+  const fenceRegex = new RegExp(LIVE_QUOTES_FENCE + 'mascot-quotes\\s*([\\s\\S]*?)' + LIVE_QUOTES_FENCE, 'i');
+  const fenceMatch = text.match(fenceRegex);
+  if (fenceMatch && fenceMatch[1]) {
+    bodyText = fenceMatch[1];
+  } else if (/mascot-quotes/i.test(text)) {
+    bodyText = text.replace(/^[\s\S]*?mascot-quotes\s*/i, '').replace(new RegExp(LIVE_QUOTES_FENCE + '[\\s\\S]*$'), '');
+  } else if (isWakingForLiveQuotes) {
+    bodyText = text;
+  } else {
+    return 0;
+  }
+
+  const rawLines = bodyText.split(/\r?\n/);
+  const existingTexts = new Set(liveQuotesPool.items.map(i => i.text));
+  const recentTexts = new Set(Array.isArray(liveQuotesPool.recent_shown) ? liveQuotesPool.recent_shown : []);
+  const slot = getCurrentTimeSlot();
+  const now = Date.now();
+  let addedCount = 0;
+
+  for (let line of rawLines) {
+    line = line
+      .trim()
+      .replace(/^[-*・•]\s*/, '')
+      .replace(/^\d+[.)．、]\s*/, '')
+      .replace(/^「(.*)」$/, '$1')
+      .trim();
+
+    if (!line) continue;
+    if (/^mascot-quotes$/i.test(line)) continue;
+    if (line.includes(LIVE_QUOTES_FENCE)) continue;
+    if (line.includes('ここに1行ずつ')) continue;
+    if (line.length > 40) continue;
+    if (existingTexts.has(line) || recentTexts.has(line)) continue;
+
+    liveQuotesPool.items.push({
+      text: line,
+      time_slot: slot,
+      created_at: now
+    });
+    existingTexts.add(line);
+    addedCount++;
+  }
+
+  if (addedCount > 0) {
+    saveLiveQuotesPool();
+  }
+  return addedCount;
+}
+
+function buildLiveQuotesWakePrompt(batchCount, timeSlot) {
+  const n = Math.max(1, Math.min(10, Number(batchCount) || 4));
+  const slot = timeSlot || getCurrentTimeSlot();
+  return [
+    `あなたの普段の口調で、デスクトップマスコットの吹き出し用に短い一言を ${n} つ考えて、`,
+    '次の形式のコードブロックに1行ずつ入れて返してください。本文はそれ以外書かないでください。',
+    `条件：1行40文字以内、時間帯（${slot}）に合った内容、直近の会話や予定に触れてもよい。`,
+    '',
+    LIVE_QUOTES_FENCE + 'mascot-quotes',
+    '（ここに1行ずつ）',
+    LIVE_QUOTES_FENCE
+  ].join('\n');
+}
+
+async function maybeTriggerLiveQuotesWake() {
+  const lq = pluginSettings.live_quotes;
+  // 1. 機能が有効である
+  if (!lq || lq.enabled !== true) return;
+
+  // 2. target_mode === "custom" の場合、有効なURLが設定されている
+  const targetMode = lq.target_mode === 'custom' ? 'custom' : 'main';
+  const customUrl = (lq.custom_chat_url || '').trim();
+  if (targetMode === 'custom' && !customUrl.startsWith('https://')) {
+    return;
+  }
+
+  // 3. Muse本体の状態が IDLE であり、かつアイドル継続時間が idle_threshold_sec 以上経過
+  if (
+    currentAvatarState !== 'idle' ||
+    isSpecialActionLocked ||
+    isSendingMessage ||
+    isWakingForLiveQuotes ||
+    latestMuseSyncedState !== 'idle'
+  ) {
+    return;
+  }
+  const now = Date.now();
+  const idleSec = (now - lastUserInteractionTime) / 1000;
+  const thresholdSec = Math.max(1, Number(pluginSettings.idle_threshold_sec) || 180);
+  if (idleSec < thresholdSec) return;
+
+  // 4. セッションウィンドウが非表示かつマスコットモード表示中
+  if (isSessionVisible || !document.body.classList.contains('mode-mascot')) {
+    return;
+  }
+
+  // 5. 前回のウェイク実行時刻から min_interval_min 分以上経過
+  const minIntervalMs = Math.max(1, Number(lq.min_interval_min) || 60) * 60 * 1000;
+  const lastWakeAt = Number(liveQuotesPool.last_wake_at) || 0;
+  if (now - lastWakeAt < minIntervalMs) {
+    return;
+  }
+
+  // 6. 当日のウェイク実行回数が daily_limit 未満
+  const today = getTodayDateString();
+  if (liveQuotesPool.daily_wake_date !== today) {
+    liveQuotesPool.daily_wake_date = today;
+    liveQuotesPool.daily_wake_count = 0;
+  }
+  const dailyLimit = Math.max(1, Number(lq.daily_limit) || 6);
+  if (liveQuotesPool.daily_wake_count >= dailyLimit) {
+    return;
+  }
+
+  // 7. 現在時刻がおやすみ時間帯（quiet_hours_start 〜 quiet_hours_end）に含まれない
+  const qStart = (lq.quiet_hours_start || '22:00').trim() || '22:00';
+  const qEnd = (lq.quiet_hours_end || '07:00').trim() || '07:00';
+  if (isWithinTimeRanges([`${qStart}-${qEnd}`])) {
+    return;
+  }
+
+  // 8. ライブプール内の有効残数が 1件以下
+  pruneExpiredLiveQuotes();
+  if (liveQuotesPool.items.length > 1) {
+    return;
+  }
+
+  // 全ガード条件成立 -> バックグラウンドウェイク実行
+  isWakingForLiveQuotes = true;
+  liveQuotesPool.last_wake_at = now;
+  liveQuotesPool.daily_wake_count += 1;
+  await saveLiveQuotesPool();
+
+  const prompt = buildLiveQuotesWakePrompt(lq.batch_count, getCurrentTimeSlot());
+  const chatUrl = targetMode === 'custom' ? customUrl : null;
+
+  try {
+    await invoke('send_live_quotes_wake', { text: prompt, chatUrl });
+    setTimeout(loadChatMessages, 2000);
+    setTimeout(loadChatMessages, 4500);
+    setTimeout(loadChatMessages, 8000);
+    setTimeout(loadChatMessages, 12000);
+  } catch (err) {
+    console.warn('maybeTriggerLiveQuotesWake error:', err);
+    isWakingForLiveQuotes = false;
+  }
+
+  setTimeout(() => {
+    if (isWakingForLiveQuotes) {
+      isWakingForLiveQuotes = false;
+    }
+  }, 45000);
+}
 
 // 放置（アイドル）時のデフォルト気まぐれつぶやき（quotes.json で上書き可能）
 let defaultIdleQuotesList = [
@@ -650,6 +943,10 @@ function getCurrentTimeSlot() {
 }
 
 function pickRandomIdleQuote(candidateQuotes = null) {
+  const liveQuote = consumeOneLiveQuote();
+  if (liveQuote) {
+    return liveQuote;
+  }
   const slot = getCurrentTimeSlot();
   const timeQuotes = timeSpecificQuotesMap[slot] || [];
 
@@ -700,6 +997,19 @@ function applyPluginConfigs(setting, quotes) {
     }
     if (setting.sound_volume !== undefined) {
       pluginSettings.sound_volume = Math.max(0, Math.min(100, Number(setting.sound_volume) || 30));
+    }
+    if (setting.live_quotes && typeof setting.live_quotes === 'object') {
+      const lq = setting.live_quotes;
+      pluginSettings.live_quotes = {
+        enabled: lq.enabled === true,
+        target_mode: lq.target_mode === 'custom' ? 'custom' : 'main',
+        custom_chat_url: typeof lq.custom_chat_url === 'string' ? lq.custom_chat_url.trim() : '',
+        batch_count: Math.max(1, Math.min(10, Number(lq.batch_count) || 4)),
+        min_interval_min: Math.max(1, Number(lq.min_interval_min) || 60),
+        daily_limit: Math.max(1, Number(lq.daily_limit) || 6),
+        quiet_hours_start: typeof lq.quiet_hours_start === 'string' && lq.quiet_hours_start.trim() ? lq.quiet_hours_start.trim() : '22:00',
+        quiet_hours_end: typeof lq.quiet_hours_end === 'string' && lq.quiet_hours_end.trim() ? lq.quiet_hours_end.trim() : '07:00'
+      };
     }
   }
 
@@ -1111,6 +1421,10 @@ async function syncAvatarStateWithMuse() {
         }
       }
 
+      latestMuseSyncedState = state;
+      if (isWakingForLiveQuotes && state !== 'idle') {
+        return;
+      }
       if (state === 'working' || state === 'making_something' || state === 'waking') {
         recordInteraction();
         setAvatarState(state, { force: true });
@@ -1154,12 +1468,12 @@ async function loadChatMessages() {
         } else if (latestAssistant !== lastSeenAssistantText) {
           // 新着、またはストリーミング途中のメッセージを受信！
           pendingAssistantText = latestAssistant;
-          recordInteraction();
+          if (!isLiveQuotesResponse(latestAssistant)) recordInteraction();
 
           // マスコットモード時は即座に吹き出しに最新返答テキストを表示（「考え中…」から最新回答へ即座に更新・シームレス追記）
           // ただしセッション画面表示中はカタカタ音・吹き出し再生を抑止 (Issue #29)
           if (document.body.classList.contains('mode-mascot') && !isSessionVisible) {
-            playLupinTyping(latestAssistant);
+            if (!isLiveQuotesResponse(latestAssistant)) playLupinTyping(latestAssistant);
           }
 
           if (assistantCommitTimer) {
@@ -1780,6 +2094,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   };
 
   // キャッシュ済みのアバターと利用枠を即時表示
+  loadLiveQuotesPool();
   loadAvatar(false);
   loadUsageLimit(false);
 
@@ -1813,6 +2128,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     await loadChatMessages();
     await syncAvatarStateWithMuse();
     checkIdleAction();
+    maybeTriggerLiveQuotesWake();
     ensureActiveAvatarSlot(); // 定期自己修復チェック (Issue #31)
   }, 3000);
 

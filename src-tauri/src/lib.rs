@@ -742,6 +742,80 @@ fn save_plugin_configs(
 }
 
 #[tauri::command]
+fn get_live_quotes(app: AppHandle) -> Result<serde_json::Value, String> {
+    let default_val = serde_json::json!({
+        "items": [],
+        "updated_at": "",
+        "last_wake_at": 0,
+        "daily_wake_date": "",
+        "daily_wake_count": 0,
+        "recent_shown": []
+    });
+
+    let writable_path = get_writable_avatar_dir(&app).join("plugin").join("live_quotes.json");
+    if writable_path.exists() {
+        if let Ok(txt) = fs::read_to_string(&writable_path) {
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&txt) {
+                return Ok(parsed);
+            }
+        }
+    }
+
+    for dir in collect_avatar_dirs(&app) {
+        let candidate = dir.join("plugin").join("live_quotes.json");
+        if candidate.exists() {
+            if let Ok(txt) = fs::read_to_string(&candidate) {
+                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&txt) {
+                    return Ok(parsed);
+                }
+            }
+        }
+    }
+
+    Ok(default_val)
+}
+
+#[tauri::command]
+fn save_live_quotes(app: AppHandle, payload: serde_json::Value) -> Result<bool, String> {
+    let plugin_dir = get_writable_avatar_dir(&app).join("plugin");
+    let _ = fs::create_dir_all(&plugin_dir);
+    let live_quotes_path = plugin_dir.join("live_quotes.json");
+    let content = serde_json::to_string_pretty(&payload)
+        .map_err(|e| format!("Failed to serialize live_quotes: {}", e))?;
+    fs::write(&live_quotes_path, content)
+        .map_err(|e| format!("Failed to write live_quotes.json: {}", e))?;
+    Ok(true)
+}
+
+#[tauri::command]
+async fn send_live_quotes_wake(
+    app: AppHandle,
+    text: String,
+    chat_url: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let session = ensure_session_window(&app)?;
+    if let Some(ref url_str) = chat_url {
+        let trimmed = url_str.trim();
+        if trimmed.starts_with("https://") {
+            let current_url = session.url().ok().map(|u| u.to_string()).unwrap_or_default();
+            if current_url != trimmed {
+                if let Ok(parsed_url) = trimmed.parse::<tauri::Url>() {
+                    let _ = session.navigate(parsed_url);
+                    tokio::time::sleep(Duration::from_millis(2500)).await;
+                }
+            }
+        }
+    }
+    run_bridge_action(
+        &session,
+        "send_message",
+        &serde_json::json!({ "text": text }),
+        8000,
+    )
+    .await
+}
+
+#[tauri::command]
 fn open_avatar_dir(app: AppHandle, target: String) -> Result<bool, String> {
     ensure_avatar_seeds(&app);
     let base_dir = get_writable_avatar_dir(&app);
@@ -2087,6 +2161,9 @@ pub fn run() {
             get_avatar_video_pack,
             get_plugin_configs,
             save_plugin_configs,
+            get_live_quotes,
+            save_live_quotes,
+            send_live_quotes_wake,
             open_avatar_dir,
             open_settings_window,
             close_settings_window,
