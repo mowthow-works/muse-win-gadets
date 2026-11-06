@@ -1,5 +1,9 @@
 # Muse Desktop Mascot
 
+[![Release](https://img.shields.io/badge/version-v1.1.0-blue.svg)](https://github.com/mowthow-works/muse-win-gadets/releases)
+[![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D6.svg)](https://www.microsoft.com/windows)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 Muse（パーソナルAIエージェント `https://muse.ai`）の Windows 向け常駐型デスクトップマスコット＆チャット連携アプリです。
 普段はデスクトップの隅に円形アバターマスコットとして控えめに常駐し、Muse の状態に応じたアニメーション・気まぐれアクション・新着メッセージのルパン風タイピング吹き出しを表示します。ダブルクリックやショートカットキー（`Ctrl + Shift + M`）で、いつでもフル機能の Muse AI チャット画面（セッション画面）を即座に呼び出せます。
 
