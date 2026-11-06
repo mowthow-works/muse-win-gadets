@@ -1,6 +1,6 @@
 # Muse Desktop Mascot
 
-[![Release](https://img.shields.io/badge/version-v1.1.0-blue.svg)](https://github.com/mowthow-works/muse-win-gadets/releases)
+[![Release](https://img.shields.io/badge/version-v1.1.1-blue.svg)](https://github.com/mowthow-works/muse-win-gadets/releases)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D6.svg)](https://www.microsoft.com/windows)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
