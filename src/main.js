@@ -1775,10 +1775,12 @@ async function toggleSessionWindow() {
     if (isSessionVisible) {
       await invoke('hide_session');
       isSessionVisible = false;
+    setTimeout(() => loadUsageLimit(false), 300);
     } else {
       hideMascotBubble();
       await invoke('open_or_show_session');
       isSessionVisible = true;
+    setTimeout(() => loadUsageLimit(false), 800);
     }
     updateSessionStatus();
   } catch (err) {
@@ -2245,6 +2247,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     await syncAvatarStateWithMuse();
     checkIdleAction();
     maybeTriggerLiveQuotesWake();
+    loadUsageLimit(false);
     ensureActiveAvatarSlot(); // 定期自己修復チェック (Issue #31)
   }, 3000);
 

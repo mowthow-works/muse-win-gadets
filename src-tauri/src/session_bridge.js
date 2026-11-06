@@ -43,17 +43,28 @@ const SELECTORS = {
   ],
   settingsButton: [
     'button[aria-label="設定"]',
+    'button[aria-label*="設定"]',
     'a[aria-label="設定"]',
-    'button.hatch-dock-reveal-item[aria-label="設定"]'
+    'a[aria-label*="設定"]',
+    'button[aria-label*="settings" i]',
+    'a[aria-label*="settings" i]',
+    'button.hatch-dock-reveal-item[aria-label*="設定"]',
+    '[data-testid*="settings"]'
   ],
   chatNavButton: [
     'button[aria-label="チャット"]',
-    'a[aria-label="チャット"]'
+    'button[aria-label*="チャット"]',
+    'a[aria-label="チャット"]',
+    'a[aria-label*="チャット"]',
+    'button[aria-label*="chat" i]',
+    'a[aria-label*="chat" i]'
   ],
   modalCloseButton: [
     '[role="dialog"] button[aria-label="閉じる"]',
+    '[role="dialog"] button[aria-label*="閉じる"]',
     '[role="dialog"] button[aria-label*="close" i]',
-    'button[aria-label="閉じる"]'
+    'button[aria-label="閉じる"]',
+    'button[aria-label*="close" i]'
   ]
 };
 
@@ -117,16 +128,20 @@ function triggerReactClick(el) {
 if (!window.__MUSE_PASSIVE_WATCHER__) {
   window.__MUSE_PASSIVE_WATCHER__ = setInterval(() => {
     try {
-      const bodyText = document.body ? document.body.innerText : '';
-      const matchUsed = bodyText.match(/(\d+)\s*%\s*使用済み/i);
+      const bodyText = document.body ? (document.body.innerText || document.body.textContent || '') : '';
+      const matchUsed = bodyText.match(/(\d+)\s*%\s*(?:使用済み|used|consumed)/i);
       if (matchUsed) {
         const usedPercent = parseInt(matchUsed[1], 10);
         const remainingPercent = Math.max(0, 100 - usedPercent);
-        const matchReset = bodyText.match(/(\d+週間の上限は[^\n。]*リセットされます|\d+月\d+日にリセットされます)/);
-        const planEl = document.querySelector('span.text-body.text-text-primary');
-        const planName = planEl && (planEl.textContent || '').includes('プラン')
-          ? planEl.textContent.trim()
-          : '無料プラン';
+        const matchReset = bodyText.match(/(\d+週間の上限は[^\n。]*リセットされます|\d+月\d+日にリセットされます|リセット\s*[:：]?\s*[^\n。]+)/);
+        const planEl = document.querySelector('span.text-body.text-text-primary, [class*="plan" i]');
+        let planName = '無料プラン';
+        if (planEl) {
+          const t = (planEl.textContent || '').trim();
+          if (t.includes('プラン') || t.includes('Plan') || t.includes('Free') || t.includes('無料')) {
+            planName = t;
+          }
+        }
         window.__MUSE_CACHED_LIMIT__ = {
           plan_name: planName,
           used_percent: usedPercent,
@@ -135,7 +150,7 @@ if (!window.__MUSE_PASSIVE_WATCHER__) {
         };
       }
     } catch (_) {}
-  }, 1500);
+  }, 1000);
 }
 
 window.__MUSE_BRIDGE__ = {
@@ -760,13 +775,11 @@ window.__MUSE_BRIDGE__ = {
         }
 
         if (p !== null) {
-          // 周辺コンテキストで「残り」か「使用済み（標準）」かを判定
           const parentTxt = (bar.closest('[role="dialog"], [class*="modal" i], div')?.innerText || '').toLowerCase();
           if (parentTxt.includes('残り') || parentTxt.includes('left') || parentTxt.includes('remaining')) {
             remainingPercent = p;
             usedPercent = 100 - p;
           } else {
-            // 一般的な進捗バーは消費量（使用済み）
             usedPercent = p;
             remainingPercent = Math.max(0, 100 - p);
           }
@@ -774,49 +787,61 @@ window.__MUSE_BRIDGE__ = {
         }
       }
 
-      const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-      let node;
-      while ((node = walker.nextNode())) {
-        const txt = (node.textContent || '').trim();
-        if (!txt) continue;
-
-        // パターン①: "○% 使用済み" / "○% consumed"
+      // 結合テキスト（innerText）からの判定を最優先（React等で「56%」と「使用済み」が別ノードに分割されている場合に対応）
+      const allText = document.body ? (document.body.innerText || '') : '';
+      if (allText) {
         if (usedPercent === null) {
-          const matchUsed = txt.match(/(\d+)\s*%\s*(?:使用済み|used|consumed)/i);
-          if (matchUsed) {
-            usedPercent = parseInt(matchUsed[1], 10);
+          const mUsed = allText.match(/(\d+)\s*%\s*(?:使用済み|used|consumed)/i);
+          if (mUsed) {
+            usedPercent = parseInt(mUsed[1], 10);
             if (remainingPercent === null) {
               remainingPercent = Math.max(0, 100 - usedPercent);
             }
           }
         }
-
-        // パターン②: "残り ○%" / "残 ○%" / "○% 残り" / "○% remaining" / "○% left"
         if (remainingPercent === null) {
-          const matchRem1 = txt.match(/(?:残り|残|remaining|left)\s*[:：]?\s*(\d+)\s*%/i);
-          const matchRem2 = txt.match(/(\d+)\s*%\s*(?:残り|残|remaining|left)/i);
-          if (matchRem1) {
-            remainingPercent = parseInt(matchRem1[1], 10);
+          const mRem1 = allText.match(/(?:残り|残|remaining|left)\s*[:：]?\s*(\d+)\s*%/i);
+          const mRem2 = allText.match(/(\d+)\s*%\s*(?:残り|残|remaining|left)/i);
+          if (mRem1) {
+            remainingPercent = parseInt(mRem1[1], 10);
             if (usedPercent === null) usedPercent = Math.max(0, 100 - remainingPercent);
-          } else if (matchRem2) {
-            remainingPercent = parseInt(matchRem2[1], 10);
+          } else if (mRem2) {
+            remainingPercent = parseInt(mRem2[1], 10);
             if (usedPercent === null) usedPercent = Math.max(0, 100 - remainingPercent);
           }
         }
-
-        // パターン③: "Limit" / "5-Hour" / "Weekly" の周辺テキストに含まれるパーセント
-        if (remainingPercent === null && usedPercent === null) {
-          const matchLimit = txt.match(/(?:\bLimit\b|5-Hour|Weekly)[^%\d]*(\d+)\s*%/i);
-          if (matchLimit) {
-            remainingPercent = parseInt(matchLimit[1], 10);
-            usedPercent = Math.max(0, 100 - remainingPercent);
-          }
-        }
-
         if (!resetText) {
-          const matchReset = txt.match(/(\d+週間の上限は[^\n。]*リセットされます|\d+月\d+日にリセットされます|リセット\s*[:：]?\s*\d+時間\s*\d+分)/);
-          if (matchReset) {
-            resetText = matchReset[1].trim();
+          const mReset = allText.match(/(\d+週間の上限は[^\n。]*リセットされます|\d+月\d+日にリセットされます|リセット\s*[:：]?\s*[^\n。]+)/);
+          if (mReset) {
+            resetText = mReset[1].trim();
+          }
+        }
+      }
+
+      // 補助: 個別テキストノード走査（TreeWalker）
+      if (usedPercent === null || remainingPercent === null || !resetText) {
+        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+        let node;
+        while ((node = walker.nextNode())) {
+          const txt = (node.textContent || '').trim();
+          if (!txt) continue;
+          if (usedPercent === null) {
+            const matchUsed = txt.match(/(\d+)\s*%\s*(?:使用済み|used|consumed)/i);
+            if (matchUsed) {
+              usedPercent = parseInt(matchUsed[1], 10);
+              if (remainingPercent === null) remainingPercent = Math.max(0, 100 - usedPercent);
+            }
+          }
+          if (remainingPercent === null) {
+            const matchRem = txt.match(/(?:残り|残|remaining|left)\s*[:：]?\s*(\d+)\s*%/i);
+            if (matchRem) {
+              remainingPercent = parseInt(matchRem[1], 10);
+              if (usedPercent === null) usedPercent = Math.max(0, 100 - remainingPercent);
+            }
+          }
+          if (!resetText) {
+            const matchReset = txt.match(/(\d+週間の上限は[^\n。]*リセットされます|\d+月\d+日にリセットされます)/);
+            if (matchReset) resetText = matchReset[1].trim();
           }
         }
       }
@@ -857,7 +882,7 @@ window.__MUSE_BRIDGE__ = {
       await new Promise(r => setTimeout(r, 500));
 
       const tabs = Array.from(document.querySelectorAll('button, a, [role="button"], [role="menuitem"], div, span'));
-      const generalTab = tabs.find(t => t.children.length === 0 && (t.textContent || '').trim() === '一般');
+      const generalTab = tabs.find(t => (t.textContent || '').trim() === '一般' || (t.children.length === 0 && (t.textContent || '').includes('一般')));
       if (generalTab) {
         triggerReactClick(generalTab);
         await new Promise(r => setTimeout(r, 550));

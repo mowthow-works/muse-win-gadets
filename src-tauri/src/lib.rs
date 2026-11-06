@@ -1141,9 +1141,9 @@ async fn get_usage_limit(
 
     let latest_cfg = load_config_internal(&app);
     if let Some(mut prev) = latest_cfg.last_limit_info {
-        if prev.used_percent.is_some() {
+        if prev.used_percent.is_some() || prev.remaining_percent.is_some() {
             if prev.reset_text.contains("mp4") || prev.reset_text.contains("KB") {
-                prev.reset_text = "1週間の上限は11月6日にリセットされます".to_string();
+                prev.reset_text = "".to_string();
                 let fixed = prev.clone();
                 update_config_internal(&app, |cfg| {
                     cfg.last_limit_info = Some(fixed);
@@ -1153,18 +1153,14 @@ async fn get_usage_limit(
         }
     }
 
-    // もしキャッシュも無く取得もできなかった場合、安全な初期デフォルト（無料プラン / 残59%）を提供
+    // キャッシュも無く新規取得も未完了の場合、未取得状態の UsageLimitInfo を返す（架空のパーセント値は設定しない）
     let fallback = UsageLimitInfo {
         plan_name: "無料プラン".to_string(),
-        used_percent: Some(41),
-        remaining_percent: Some(59),
-        reset_text: "1週間の上限は11月6日にリセットされます".to_string(),
+        used_percent: None,
+        remaining_percent: None,
+        reset_text: "セッション画面の[設定>一般]で同期".to_string(),
         updated_at: now_str,
     };
-    let fb_save = fallback.clone();
-    update_config_internal(&app, |cfg| {
-        cfg.last_limit_info = Some(fb_save);
-    });
     Ok(fallback)
 }
 
