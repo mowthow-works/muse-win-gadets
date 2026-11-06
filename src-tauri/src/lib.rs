@@ -84,6 +84,8 @@ static SESSION_BRIDGE_JS: &str = include_str!("session_bridge.js");
 pub struct ChatMessage {
     pub role: String, // "user" or "assistant"
     pub text: String,
+    #[serde(default)]
+    pub options: Option<Vec<String>>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

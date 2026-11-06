@@ -1417,3 +1417,66 @@ body:not(.mode-mascot) .mascot-quick-input-btn {
 .mascot-input-btn-close:hover {
   color: #ffffff;
 }
+
+/* 選択肢ボタンエリア (Issue #32) */
+.mascot-bubble-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed rgba(255, 255, 255, 0.15);
+}
+
+.mascot-bubble-options.hidden {
+  display: none !important;
+}
+
+.mascot-option-btn {
+  background: rgba(30, 41, 59, 0.85);
+  color: #f8fafc;
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-size: var(--mascot-bubble-font, 12px);
+  cursor: pointer;
+  transition: all 0.15s ease-in-out;
+  text-align: left;
+  line-height: 1.4;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  user-select: none;
+}
+
+.mascot-option-btn:hover {
+  background: rgba(14, 116, 144, 0.65);
+  border-color: rgba(56, 189, 248, 0.8);
+  transform: translateY(-1px);
+}
+
+.mascot-option-btn:active {
+  transform: translateY(0);
+  background: rgba(14, 116, 144, 0.9);
+}
+
+.mascot-option-footer {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 2px;
+}
+
+.mascot-option-session-btn {
+  background: transparent;
+  color: var(--text-muted, #94a3b8);
+  border: 1px dashed rgba(255, 255, 255, 0.25);
+  border-radius: 6px;
+  padding: 3px 8px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.15s ease-in-out;
+}
+
+.mascot-option-session-btn:hover {
+  color: #ffffff;
+  border-color: rgba(255, 255, 255, 0.5);
+  background: rgba(255, 255, 255, 0.08);
+}

@@ -489,6 +489,43 @@ window.__MUSE_BRIDGE__ = {
       throw new Error("UNSUPPORTED_OR_UNAUTH: メインチャットの画面構造が見つかりません");
     }
 
+    // 選択肢（クイックリプライ / サジェスチョンボタン）抽出用 (Issue #32)
+    const systemKeywords = [
+      'コピー', 'オプション', '再生成', '評価', '編集', '共有', '削除', 'フィードバック',
+      '詳細', '閉じる', 'メニュー', 'いいね', '低評価', 'good', 'bad', 'copy', 'option',
+      'edit', 'share', 'delete', 'retry', 'regenerate', 'feedback', 'menu', 'close'
+    ];
+
+    const extractOptions = (el) => {
+      if (!el) return [];
+      const btnEls = Array.from(el.querySelectorAll('button, [role="button"], [class*="suggestion" i], [class*="chip" i], [class*="choice" i]'));
+      const opts = [];
+
+      for (const b of btnEls) {
+        if (b.parentElement && b.parentElement.closest('button, [role="button"]')) continue;
+
+        const aria = (b.getAttribute('aria-label') || '').toLowerCase();
+        const title = (b.getAttribute('title') || '').toLowerCase();
+        const srEl = b.querySelector('.sr-only');
+        const sr = srEl ? (srEl.textContent || '').toLowerCase() : '';
+
+        const isSystem = systemKeywords.some(kw => aria.includes(kw) || title.includes(kw) || sr.includes(kw));
+        if (isSystem) continue;
+
+        const clone = b.cloneNode(true);
+        clone.querySelectorAll('svg, i, .sr-only, [class*="icon" i]').forEach(node => node.remove());
+        const label = (clone.textContent || '').replace(/^[\s\uFEFF\xA0\u3000]+|[\s\uFEFF\xA0\u3000]+$/g, '').trim();
+
+        if (label.length >= 1 && label.length <= 120) {
+          if (systemKeywords.some(kw => label.toLowerCase() === kw)) continue;
+          if (!opts.includes(label)) {
+            opts.push(label);
+          }
+        }
+      }
+      return opts;
+    };
+
     const messages = [];
 
     for (const el of messageEls) {
@@ -509,15 +546,31 @@ window.__MUSE_BRIDGE__ = {
         }
       }
 
-      const text = rawText
+      let text = rawText
         .replace(/^(自分:|アシスタントメッセージ:)\s*/i, '')
         .replace(/^[\s\uFEFF\xA0\u3000]+/g, '')
         .replace(/[\s\uFEFF\xA0\u3000]+$/g, '')
         .replace(/^[ \t\u3000]+/gm, '')
         .trim();
 
+      // アシスタント返答内の選択肢の抽出 (Issue #32)
+      let options = [];
+      if (!isUser) {
+        options = extractOptions(el);
+        // 本文末尾にボタンのテキストが混入している場合はクリーンアップ
+        for (const opt of options) {
+          if (text.endsWith(opt)) {
+            text = text.slice(0, -opt.length).trim();
+          }
+        }
+      }
+
       if (text.length > 0) {
-        messages.push({ role, text });
+        const msgObj = { role, text };
+        if (options.length > 0) {
+          msgObj.options = options;
+        }
+        messages.push(msgObj);
       }
     }
 

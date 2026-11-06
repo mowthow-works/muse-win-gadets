@@ -57,6 +57,7 @@ const mascotBubble = document.getElementById('mascot-bubble');
 const mascotBubbleText = document.getElementById('mascot-bubble-text');
 const mascotBubbleCursor = document.getElementById('mascot-bubble-cursor');
 const btnBubbleClose = document.getElementById('btn-bubble-close');
+const mascotBubbleOptions = document.getElementById('mascot-bubble-options');
 
 // マスコットミニ入力バー要素 (Issue #27)
 const mascotInputBar = document.getElementById('mascot-input-bar');
@@ -284,6 +285,78 @@ function playTouchReactionSound() {
 
 let currentTypingTargetText = '';
 let currentTypingIdx = 0;
+let currentTypingOptions = [];
+
+// 選択肢ボタンの描画 (Issue #32)
+function renderMascotOptions(options) {
+  if (!mascotBubbleOptions) return;
+  mascotBubbleOptions.innerHTML = '';
+
+  if (!options || options.length === 0) {
+    mascotBubbleOptions.classList.add('hidden');
+    return;
+  }
+
+  options.forEach(optText => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'mascot-option-btn';
+    btn.textContent = optText;
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      await handleSelectOption(optText);
+    });
+    mascotBubbleOptions.appendChild(btn);
+  });
+
+  // セッション画面誘導ボタン (フォールバック)
+  const footer = document.createElement('div');
+  footer.className = 'mascot-option-footer';
+  const sessionBtn = document.createElement('button');
+  sessionBtn.type = 'button';
+  sessionBtn.className = 'mascot-option-session-btn';
+  sessionBtn.textContent = '🖥️ セッションで開く';
+  sessionBtn.title = '公式チャット画面を開いて直接操作します';
+  sessionBtn.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    hideMascotBubble();
+    await invoke('open_or_show_session');
+  });
+  footer.appendChild(sessionBtn);
+  mascotBubbleOptions.appendChild(footer);
+
+  mascotBubbleOptions.classList.remove('hidden');
+  if (mascotBubbleText && mascotBubbleText.parentElement) {
+    mascotBubbleText.parentElement.scrollTop = mascotBubbleText.parentElement.scrollHeight;
+  }
+}
+
+// 選択肢クリック時のワンクリック返信 (Issue #32)
+async function handleSelectOption(optionText) {
+  if (!optionText) return;
+  // 回答前メッセージが未確定（2秒の確定待ち）のままだと、確定処理や定期同期が
+  // そのメッセージを吹き出しに再生し直して選択肢が再表示されるため、クリック時点で確定済みにする
+  if (assistantCommitTimer) {
+    clearTimeout(assistantCommitTimer);
+    assistantCommitTimer = null;
+  }
+  if (pendingAssistantText) {
+    lastSeenAssistantText = pendingAssistantText;
+    lastCommittedAssistantText = pendingAssistantText;
+    pendingAssistantText = null;
+  }
+  hideMascotBubble();
+  recordInteraction();
+  setAvatarState('working');
+
+  try {
+    playLupinTyping(`「${optionText}」を送信中…`);
+    await invoke('send_chat_message', { text: optionText });
+  } catch (err) {
+    console.error('Failed to send option:', err);
+    playLupinTyping(`送信エラー: ${err?.message || err}`);
+  }
+}
 
 function startTypingLoop(text) {
   const delay = Math.min(24, Math.max(10, Math.floor(1600 / Math.max(1, text.length))));
@@ -305,8 +378,18 @@ function startTypingLoop(text) {
       setTimeout(() => {
         if (!typingTimer) mascotBubbleCursor.classList.add('hidden');
       }, 700);
+
+      // タイピング完了時に選択肢ボタンを表示 (Issue #32)
+      if (currentTypingOptions && currentTypingOptions.length > 0) {
+        renderMascotOptions(currentTypingOptions);
+      }
+
       // setting.json の bubble_display_duration_sec 秒後に自動的にフェードアウト
-      const bubbleDurationMs = Math.max(1, Number(pluginSettings.bubble_display_duration_sec) || 30) * 1000;
+      // ※選択肢がある場合は回答できるよう長めに保持 (最低180秒)
+      const baseSec = Math.max(1, Number(pluginSettings.bubble_display_duration_sec) || 30);
+      const bubbleDurationMs = (currentTypingOptions && currentTypingOptions.length > 0)
+        ? Math.max(180, baseSec) * 1000
+        : baseSec * 1000;
       autoHideTimer = setTimeout(() => {
         mascotBubble.classList.add('hidden');
       }, bubbleDurationMs);
@@ -314,7 +397,7 @@ function startTypingLoop(text) {
   }, delay);
 }
 
-function playLupinTyping(text) {
+function playLupinTyping(text, options = []) {
   if (!mascotBubble || !mascotBubbleText) return;
   closeMascotInput();
   const cleanedText = cleanMascotMessageText(text);
@@ -334,6 +417,7 @@ function playLupinTyping(text) {
     (currentShown && cleanedText.startsWith(currentShown) && cleanedText.length >= currentShown.length)
   )) {
     currentTypingTargetText = cleanedText;
+    currentTypingOptions = Array.isArray(options) ? options : [];
 
     // 前のタイピングが既に完了してフェードアウト待ちに入っていた場合はタイピングタイマーを再開
     if (!typingTimer && currentTypingIdx < cleanedText.length) {
@@ -342,6 +426,7 @@ function playLupinTyping(text) {
         autoHideTimer = null;
       }
       mascotBubbleCursor.classList.remove('hidden');
+      if (mascotBubbleOptions) mascotBubbleOptions.classList.add('hidden');
       startTypingLoop(cleanedText);
     }
     return;
@@ -359,7 +444,12 @@ function playLupinTyping(text) {
 
   currentTypingTargetText = cleanedText;
   currentTypingIdx = 0;
+  currentTypingOptions = Array.isArray(options) ? options : [];
   mascotBubbleText.textContent = '';
+  if (mascotBubbleOptions) {
+    mascotBubbleOptions.innerHTML = '';
+    mascotBubbleOptions.classList.add('hidden');
+  }
   mascotBubbleCursor.classList.remove('hidden');
   mascotBubble.classList.remove('hidden');
 
@@ -378,6 +468,11 @@ function hideMascotBubble() {
   if (mascotBubble) {
     mascotBubble.classList.add('hidden');
   }
+  if (mascotBubbleOptions) {
+    mascotBubbleOptions.classList.add('hidden');
+    mascotBubbleOptions.innerHTML = '';
+  }
+  currentTypingOptions = [];
 }
 
 // ==========================================
@@ -1470,7 +1565,9 @@ async function loadChatMessages() {
     // 新着アシスタントメッセージの検知 & 会話連動のアバター状態同期
     if (messages && messages.length > 0) {
       const assistantMsgs = messages.filter(m => m.role === 'assistant');
-      const latestAssistant = assistantMsgs.length > 0 ? assistantMsgs[assistantMsgs.length - 1].text : null;
+      const latestAssistantObj = assistantMsgs.length > 0 ? assistantMsgs[assistantMsgs.length - 1] : null;
+      const latestAssistant = latestAssistantObj ? latestAssistantObj.text : null;
+      const latestOptions = latestAssistantObj ? (latestAssistantObj.options || []) : [];
       if (latestAssistant) {
         if (lastSeenAssistantText === null) {
           // 初回起動時: 過去の最新メッセージを記録するのみ（初回起動でいきなり過去ログをタイピングしない）
@@ -1483,7 +1580,7 @@ async function loadChatMessages() {
           // マスコットモード時は即座に吹き出しに最新返答テキストを表示（「考え中…」から最新回答へ即座に更新・シームレス追記）
           // ただしセッション画面表示中はカタカタ音・吹き出し再生を抑止 (Issue #29)
           if (document.body.classList.contains('mode-mascot') && !isSessionVisible) {
-            if (!isLiveQuotesResponse(latestAssistant)) playLupinTyping(latestAssistant);
+            if (!isLiveQuotesResponse(latestAssistant)) playLupinTyping(latestAssistant, latestOptions);
           }
 
           if (assistantCommitTimer) {
@@ -1495,6 +1592,15 @@ async function loadChatMessages() {
           assistantCommitTimer = setTimeout(() => {
             commitPendingAssistantMessage();
           }, 2000);
+        } else if (latestOptions.length > 0 && (!currentTypingOptions || currentTypingOptions.length === 0)) {
+          // 本文表示後に選択肢ボタンが遅れて描画された場合の追加反映 (Issue #32)
+          // 吹き出しが「このメッセージ自体」を表示しているときだけ反映する。
+          // （選択肢クリック後の「送信中…」表示中に、回答前メッセージの選択肢が再表示されるのを防ぐ）
+          const isShowingThisMessage = currentTypingTargetText === cleanMascotMessageText(latestAssistant);
+          if (isShowingThisMessage && !mascotBubble.classList.contains('hidden') && !typingTimer) {
+            currentTypingOptions = latestOptions;
+            renderMascotOptions(latestOptions);
+          }
         }
       }
     }
