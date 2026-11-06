@@ -902,39 +902,43 @@ fn get_avatar_video_pack(app: AppHandle) -> Result<AvatarVideoPack, String> {
     let configs = load_plugin_configs_internal(&app);
     let mut plugins: Vec<PluginVideoItem> = Vec::new();
 
-    let plugin_dir_opt = avatar_dirs
-        .iter()
-        .map(|d| d.join("plugin"))
-        .find(|p| p.exists() && p.is_dir());
+    // 候補ディレクトリすべてから plugin/*.mp4 を網羅的に収集・マージ (Issue #38)
+    let mut loaded_plugin_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for d in &avatar_dirs {
+        let pdir = d.join("plugin");
+        if pdir.exists() && pdir.is_dir() {
+            if let Ok(entries) = fs::read_dir(&pdir) {
+                let mut mp4_paths: Vec<PathBuf> = entries
+                    .filter_map(|e| e.ok().map(|de| de.path()))
+                    .filter(|p| {
+                        p.is_file()
+                            && p.extension()
+                                .and_then(|ext| ext.to_str())
+                                .map(|ext| ext.eq_ignore_ascii_case("mp4"))
+                                .unwrap_or(false)
+                    })
+                    .collect();
+                mp4_paths.sort();
 
-    if let Some(plugin_dir) = plugin_dir_opt {
-        if let Ok(entries) = fs::read_dir(&plugin_dir) {
-            let mut mp4_paths: Vec<PathBuf> = entries
-                .filter_map(|e| e.ok().map(|de| de.path()))
-                .filter(|p| {
-                    p.is_file()
-                        && p.extension()
-                            .and_then(|ext| ext.to_str())
-                            .map(|ext| ext.eq_ignore_ascii_case("mp4"))
-                            .unwrap_or(false)
-                })
-                .collect();
-            mp4_paths.sort();
+                for path in mp4_paths {
+                    let Some(file_name) = path.file_name().and_then(|n| n.to_str()).map(|s| s.to_string()) else {
+                        continue;
+                    };
 
-            for path in mp4_paths {
-                let Some(file_name) = path.file_name().and_then(|n| n.to_str()).map(|s| s.to_string()) else {
-                    continue;
-                };
+                    if loaded_plugin_names.contains(&file_name) {
+                        continue;
+                    }
 
-                if let Ok(bytes) = fs::read(&path) {
-                    if !bytes.is_empty() {
-                        let data_url =
-                            format!("data:video/mp4;base64,{}", BASE64_STANDARD.encode(&bytes));
-
-                        plugins.push(PluginVideoItem {
-                            name: file_name,
-                            data_url,
-                        });
+                    if let Ok(bytes) = fs::read(&path) {
+                        if !bytes.is_empty() {
+                            let data_url =
+                                format!("data:video/mp4;base64,{}", BASE64_STANDARD.encode(&bytes));
+                            loaded_plugin_names.insert(file_name.clone());
+                            plugins.push(PluginVideoItem {
+                                name: file_name,
+                                data_url,
+                            });
+                        }
                     }
                 }
             }

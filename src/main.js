@@ -943,19 +943,29 @@ function getCurrentTimeSlot() {
 }
 
 function pickRandomIdleQuote(candidateQuotes = null) {
-  const liveQuote = consumeOneLiveQuote();
-  if (liveQuote) {
-    return liveQuote;
-  }
+  const hasSpecificVideoQuotes = candidateQuotes && candidateQuotes.length > 0 && candidateQuotes !== defaultIdleQuotesList;
   const slot = getCurrentTimeSlot();
   const timeQuotes = timeSpecificQuotesMap[slot] || [];
 
-  // もしプラグイン動画固有のセリフが明示的にあり、かつデフォルト一覧と異なる場合
-  if (candidateQuotes && candidateQuotes.length > 0 && candidateQuotes !== defaultIdleQuotesList) {
+  // A. 再生中の動画に専用セリフがあるとき (Issue #38): ライブ 50% / 動画専用 50% で抽選
+  if (hasSpecificVideoQuotes) {
+    if (Math.random() < 0.5) {
+      const liveQuote = consumeOneLiveQuote();
+      if (liveQuote) {
+        return liveQuote;
+      }
+    }
+    // 残り 50%、またはライブプールが空の場合は動画専用セリフ（一部時間帯セリフ）
     if (timeQuotes.length > 0 && Math.random() < 0.3) {
       return timeQuotes[Math.floor(Math.random() * timeQuotes.length)];
     }
     return candidateQuotes[Math.floor(Math.random() * candidateQuotes.length)];
+  }
+
+  // B. 専用セリフのない動画や通常アクション: 従来通りライブセリフ最優先 (Issue #37)
+  const liveQuote = consumeOneLiveQuote();
+  if (liveQuote) {
+    return liveQuote;
   }
 
   // デフォルトまたは候補なしの場合:
