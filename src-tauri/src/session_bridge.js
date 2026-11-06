@@ -240,20 +240,39 @@ window.__MUSE_BRIDGE__ = {
         curr = curr.parentElement;
       }
 
-      // 2. ご指定のXPathおよびアバター下のステータステキスト（「リンク済み」など）の取得
-      const STATUS_XPATH = '/html/body/div[2]/div/div/div/div/div[1]/div/div[2]/div[1]/div/div[2]/div/div[2]/div[2]/div[1]/div/div/div/div[3]/div/div/div/div/div';
+      // 2. アバター下のステータステキスト（「🛠️ は動作中です」「リンク済み」など）の取得 (Issue #35)
+      let statusText = '';
       let statusEl = null;
+
+      // 優先探索A: アバター動画/アイコン周辺、またはアバター名周辺にある「動作中」「リンク済み」等の要素
       try {
-        statusEl = document.evaluate(
-          STATUS_XPATH,
-          document,
-          null,
-          XPathResult.FIRST_ORDERED_NODE_TYPE,
-          null
-        ).singleNodeValue;
+        const candidates = Array.from(document.querySelectorAll('span, div, p')).filter(e => {
+          if (e.children.length > 0) return false;
+          const t = (e.textContent || '').trim();
+          return t.includes('動作中') || t.includes('リンク済み') || t.includes('考え中') || t.includes('作業中') || t.includes('実行中');
+        });
+        if (candidates.length > 0) {
+          statusEl = candidates[0];
+          statusText = (statusEl.textContent || '').trim();
+        }
       } catch (_) {}
 
-      let statusText = statusEl ? (statusEl.innerText || statusEl.textContent || '').trim() : '';
+      // 優先探索B: 従来の固定XPath
+      if (!statusText) {
+        const STATUS_XPATH = '/html/body/div[2]/div/div/div/div/div[1]/div/div[2]/div[1]/div/div[2]/div/div[2]/div[2]/div[1]/div/div/div/div[3]/div/div/div/div/div';
+        try {
+          statusEl = document.evaluate(
+            STATUS_XPATH,
+            document,
+            null,
+            XPathResult.FIRST_ORDERED_NODE_TYPE,
+            null
+          ).singleNodeValue;
+          if (statusEl) {
+            statusText = (statusEl.innerText || statusEl.textContent || '').trim();
+          }
+        } catch (_) {}
+      }
 
       // statusEl 自身の React Fiber / Props も探索
       if (statusEl && !fiberState) {
@@ -674,21 +693,31 @@ window.__MUSE_BRIDGE__ = {
         }
       }
 
-      // プログレスバー要素の属性（aria-valuenow や style="width: 50%" 等）から直接パーセントを検出
+      // プログレスバー要素の属性（aria-valuenow や style="width: 50%" 等）からパーセントを検出
       const progressBars = Array.from(document.querySelectorAll('[role="progressbar"], [class*="progress" i]'));
       for (const bar of progressBars) {
+        let p = null;
         const valNow = bar.getAttribute('aria-valuenow');
         if (valNow !== null && !isNaN(parseInt(valNow, 10))) {
-          const p = Math.max(0, Math.min(100, parseInt(valNow, 10)));
-          remainingPercent = p;
-          usedPercent = 100 - p;
-          break;
+          p = Math.max(0, Math.min(100, parseInt(valNow, 10)));
+        } else {
+          const wMatch = (bar.getAttribute('style') || '').match(/width\s*:\s*(\d+(?:\.\d+)?)\s*%/i);
+          if (wMatch) {
+            p = Math.round(parseFloat(wMatch[1]));
+          }
         }
-        const wMatch = (bar.getAttribute('style') || '').match(/width\s*:\s*(\d+(?:\.\d+)?)\s*%/i);
-        if (wMatch) {
-          const p = Math.round(parseFloat(wMatch[1]));
-          remainingPercent = p;
-          usedPercent = 100 - p;
+
+        if (p !== null) {
+          // 周辺コンテキストで「残り」か「使用済み（標準）」かを判定
+          const parentTxt = (bar.closest('[role="dialog"], [class*="modal" i], div')?.innerText || '').toLowerCase();
+          if (parentTxt.includes('残り') || parentTxt.includes('left') || parentTxt.includes('remaining')) {
+            remainingPercent = p;
+            usedPercent = 100 - p;
+          } else {
+            // 一般的な進捗バーは消費量（使用済み）
+            usedPercent = p;
+            remainingPercent = Math.max(0, 100 - p);
+          }
           break;
         }
       }
@@ -802,7 +831,7 @@ window.__MUSE_BRIDGE__ = {
         }
       }
 
-      if (afterClick && afterClick.used_percent !== null) {
+      if (afterClick && (afterClick.used_percent !== null || afterClick.remaining_percent !== null)) {
         window.__MUSE_CACHED_LIMIT__ = afterClick;
         return afterClick;
       }

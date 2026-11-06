@@ -44,6 +44,8 @@ const btnFetchAvatar = document.getElementById('btn-fetch-avatar');
 const avatarNameEl = document.getElementById('avatar-name');
 const avatarNameTextEl = document.getElementById('avatar-name-text');
 const avatarLimitBadgeEl = document.getElementById('avatar-limit-badge');
+const avatarStatusPillEl = document.getElementById('avatar-status-pill');
+const avatarStatusTextEl = document.getElementById('avatar-status-text');
 const unreadBadgeEl = document.getElementById('unread-badge');
 const avatarColumn = document.getElementById('avatar-column');
 const mascotRestoreBtn = document.getElementById('mascot-restore-btn');
@@ -426,8 +428,8 @@ async function sendMascotQuickMessage() {
   recordInteraction();
   setAvatarState('working');
 
-  // タイピング吹き出しで「考え中…」を表示
-  playLupinTyping('考え中…');
+  // Issue #35: 送信時の「考え中…」ポップアップは非表示（返答受信まで非表示を維持）
+  hideMascotBubble();
 
   try {
     await invoke('send_chat_message', { text });
@@ -1084,18 +1086,38 @@ function checkIdleAction() {
   }
 }
 
-// Muse 本体のリアルタイム動作状態同期
+// Muse 本体のリアルタイム動作状態同期 (Issue #35)
 async function syncAvatarStateWithMuse() {
   try {
     const res = await invoke('get_avatar_state');
-    if (res && res.state) {
-      if (res.state === 'working' || res.state === 'making_something' || res.state === 'waking') {
+    if (res) {
+      const state = res.state || 'idle';
+      const statusText = (res.statusText || '').trim();
+
+      // ステータスピル更新: 「リンク済み」「待機中」等の待機テキストは非表示。動作中テキストのみ表示 (Issue #35)
+      if (avatarStatusPillEl && avatarStatusTextEl) {
+        const isIdleText = !statusText || /リンク|オンライン|待機|接続|ready|idle|online|connected/i.test(statusText);
+        if (state === 'idle' || isIdleText) {
+          avatarStatusPillEl.classList.add('hidden');
+        } else {
+          // Muse側のアイコン(SVG)とテキストが分離しているため、絵文字がない場合は 🛠️ を付与
+          let formattedText = statusText;
+          const hasEmoji = /^(\p{Emoji}|[\u2600-\u27BF])/u.test(formattedText);
+          if (!hasEmoji) {
+            formattedText = `🛠️ ${formattedText}`;
+          }
+          avatarStatusTextEl.textContent = formattedText;
+          avatarStatusPillEl.classList.remove('hidden');
+        }
+      }
+
+      if (state === 'working' || state === 'making_something' || state === 'waking') {
         recordInteraction();
-        setAvatarState(res.state, { force: true });
-      } else if (res.state === 'milestone_level_up') {
+        setAvatarState(state, { force: true });
+      } else if (state === 'milestone_level_up') {
         recordInteraction();
         setAvatarState('milestone_level_up', { durationMs: 6000, lockDuration: true, force: true });
-      } else if (res.state === 'idle') {
+      } else if (state === 'idle') {
         // Muse本体の作業が完了して idle に戻った場合、もし保留中の返信メッセージがあれば即座に全文表示
         if (pendingAssistantText && pendingAssistantText !== lastSeenAssistantText) {
           commitPendingAssistantMessage();
@@ -1427,13 +1449,39 @@ window.addEventListener('DOMContentLoaded', async () => {
   let avatarDownX = 0;
   let avatarDownY = 0;
 
-  // ネームプレート（ラッキー）は即時ドラッグ
+  // ネームプレート（ラッキー 50%）: ドラッグとクリックを分離して手動即時リフレッシュを確実に発火
   if (avatarNameEl) {
-    avatarNameEl.addEventListener('mousedown', (e) => {
-      if (document.body.classList.contains('mode-mascot')) {
-        invoke('drag_window').then(() => {
-          setTimeout(updateMascotBubbleDirection, 40);
-        }).catch(console.error);
+    let nameMouseDownPos = null;
+    avatarNameEl.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;
+      nameMouseDownPos = { x: e.screenX, y: e.screenY, time: Date.now() };
+    });
+
+    avatarNameEl.addEventListener('pointermove', (e) => {
+      if (!nameMouseDownPos) return;
+      const dist = Math.hypot(e.screenX - nameMouseDownPos.x, e.screenY - nameMouseDownPos.y);
+      if (dist > 5) {
+        nameMouseDownPos = null;
+        if (document.body.classList.contains('mode-mascot')) {
+          invoke('drag_window').then(() => {
+            setTimeout(updateMascotBubbleDirection, 40);
+          }).catch(console.error);
+        }
+      }
+    });
+
+    avatarNameEl.addEventListener('pointerup', (e) => {
+      if (!nameMouseDownPos) return;
+      const dist = Math.hypot(e.screenX - nameMouseDownPos.x, e.screenY - nameMouseDownPos.y);
+      const elapsed = Date.now() - nameMouseDownPos.time;
+      nameMouseDownPos = null;
+      // 5px 以内の移動かつ 500ms 以内の押下なら「クリック」と判定して手動即時リフレッシュを実行！
+      if (dist <= 5 && elapsed < 500) {
+        avatarNameEl.classList.remove('refreshing');
+        void avatarNameEl.offsetWidth; // リフロー
+        avatarNameEl.classList.add('refreshing');
+        setTimeout(() => avatarNameEl.classList.remove('refreshing'), 600);
+        loadUsageLimit(true);
       }
     });
   }

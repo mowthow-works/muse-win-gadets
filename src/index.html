@@ -43,9 +43,13 @@
           <div class="unread-badge hidden" id="unread-badge" style="display: none;" title="未読メッセージがあります（クリックで開く）"></div>
           <button class="mascot-quick-input-btn" id="btn-mascot-quick-input" title="質問を入力 (💬)">💬</button>
         </div>
-        <div class="avatar-name" id="avatar-name">
+        <div class="avatar-name" id="avatar-name" title="クリックで利用枠を最新化 / ドラッグで移動">
           <span class="avatar-name-text" id="avatar-name-text">ラッキー</span>
           <span class="avatar-limit-badge" id="avatar-limit-badge">--%</span>
+        </div>
+        <!-- マスコットモード専用: アバターステータスピル (Issue #35: 動作中のみ表示) -->
+        <div class="avatar-status-pill hidden" id="avatar-status-pill">
+          <span class="avatar-status-text" id="avatar-status-text">🛠️ は動作中です</span>
         </div>
       </div>
 
