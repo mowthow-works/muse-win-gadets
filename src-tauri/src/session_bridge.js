@@ -244,35 +244,27 @@ window.__MUSE_BRIDGE__ = {
       let statusText = '';
       let statusEl = null;
 
-      // 優先探索A: アバター動画/アイコン周辺、またはアバター名周辺にある「動作中」「リンク済み」等の要素
+      // チャット本文・入力欄要素から誤ってテキストを拾わないよう除外ガード (Issue #42)
+      const isInsideChat = (el) => {
+        if (!el) return false;
+        return !!el.closest('main, [class*="chat" i], [class*="prose" i], [class*="group/msg" i], [role="log"], textarea');
+      };
+
+      // 優先探索: アバター動画 v の直近コンテナ内、またはアバター名周辺からステータス文字列を探索 (固定XPathは全廃)
       try {
-        const candidates = Array.from(document.querySelectorAll('span, div, p')).filter(e => {
+        const rootContainer = v ? (v.closest('[class*="avatar" i], [class*="dock" i], [class*="header" i], aside') || v.parentElement) : document.body;
+        const candidates = Array.from(rootContainer.querySelectorAll('span, div, p')).filter(e => {
           if (e.children.length > 0) return false;
+          if (isInsideChat(e)) return false;
           const t = (e.textContent || '').trim();
-          return t.includes('動作中') || t.includes('リンク済み') || t.includes('考え中') || t.includes('作業中') || t.includes('実行中');
+          if (t.length === 0 || t.length > 20) return false;
+          return /動作中|リンク済み|考え中|作業中|実行中|オンライン|待機中|オフライン/i.test(t);
         });
         if (candidates.length > 0) {
           statusEl = candidates[0];
           statusText = (statusEl.textContent || '').trim();
         }
       } catch (_) {}
-
-      // 優先探索B: 従来の固定XPath
-      if (!statusText) {
-        const STATUS_XPATH = '/html/body/div[2]/div/div/div/div/div[1]/div/div[2]/div[1]/div/div[2]/div/div[2]/div[2]/div[1]/div/div/div/div[3]/div/div/div/div/div';
-        try {
-          statusEl = document.evaluate(
-            STATUS_XPATH,
-            document,
-            null,
-            XPathResult.FIRST_ORDERED_NODE_TYPE,
-            null
-          ).singleNodeValue;
-          if (statusEl) {
-            statusText = (statusEl.innerText || statusEl.textContent || '').trim();
-          }
-        } catch (_) {}
-      }
 
       // statusEl 自身の React Fiber / Props も探索
       if (statusEl && !fiberState) {
