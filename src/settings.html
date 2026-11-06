@@ -212,8 +212,11 @@
                 専用チャット URL
                 <span class="unit">https://...</span>
               </label>
-              <input type="text" id="live-quotes-custom-url" placeholder="https://muse.ai/...">
-              <p class="form-hint">つぶやき生成専用に作成した Muse チャットスレッドの URL を指定します。</p>
+              <div style="display: flex; gap: 8px; align-items: center;">
+                <input type="text" id="live-quotes-custom-url" placeholder="https://muse.ai/..." style="flex: 1;">
+                <button type="button" class="btn btn-secondary" id="btn-fill-current-chat-url" style="white-space: nowrap; padding: 7px 12px; font-size: 12px;" title="セッション画面で現在開いているチャットのURLを自動入力します">📍 今開いているチャットを登録</button>
+              </div>
+              <p class="form-hint">つぶやき生成専用に作成した Muse チャットスレッドの URL を指定します。「今開いているチャットを登録」を押すと、セッション画面で開いている現在URLを自動取得できます。</p>
             </div>
 
             <div class="form-group">

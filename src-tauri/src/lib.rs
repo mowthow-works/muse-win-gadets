@@ -1793,24 +1793,16 @@ async fn open_session_devtools(app: AppHandle) -> Result<bool, String> {
 
 #[tauri::command]
 async fn get_session_status(app: AppHandle) -> Result<SessionStatus, String> {
-    if let Some(session) = app.get_webview_window("session") {
-        let visible = session.is_visible().unwrap_or(false);
-        let title = session.title().ok();
-        let url = session.url().ok().map(|u| u.to_string());
-        Ok(SessionStatus {
-            exists: true,
-            visible,
-            title,
-            url,
-        })
-    } else {
-        Ok(SessionStatus {
-            exists: false,
-            visible: false,
-            title: None,
-            url: None,
-        })
-    }
+    let session = ensure_session_window(&app)?;
+    let visible = session.is_visible().unwrap_or(false);
+    let title = session.title().ok();
+    let url = session.url().ok().map(|u| u.to_string());
+    Ok(SessionStatus {
+        exists: true,
+        visible,
+        title,
+        url,
+    })
 }
 
 #[tauri::command]

@@ -113,6 +113,7 @@ const liveQuotesEnabled = document.getElementById('live-quotes-enabled');
 const liveQuotesTargetRadios = document.querySelectorAll('input[name="live-quotes-target-mode"]');
 const liveQuotesCustomUrlGroup = document.getElementById('live-quotes-custom-url-group');
 const liveQuotesCustomUrl = document.getElementById('live-quotes-custom-url');
+const btnFillCurrentChatUrl = document.getElementById('btn-fill-current-chat-url');
 const liveQuotesBatchCount = document.getElementById('live-quotes-batch-count');
 const liveQuotesMinInterval = document.getElementById('live-quotes-min-interval');
 const liveQuotesDailyLimit = document.getElementById('live-quotes-daily-limit');
@@ -130,6 +131,30 @@ function updateLiveQuotesCustomUrlVisibility() {
 liveQuotesTargetRadios.forEach(radio => {
   radio.addEventListener('change', updateLiveQuotesCustomUrlVisibility);
 });
+
+if (btnFillCurrentChatUrl) {
+  btnFillCurrentChatUrl.addEventListener('click', async () => {
+    try {
+      btnFillCurrentChatUrl.disabled = true;
+      btnFillCurrentChatUrl.textContent = '取得中...';
+      const status = await invoke('get_session_status');
+      if (status && status.url && (status.url.startsWith('http://') || status.url.startsWith('https://'))) {
+        if (liveQuotesCustomUrl) {
+          liveQuotesCustomUrl.value = status.url;
+        }
+        showStatus('現在開いているチャットURLを反映しました', 'success');
+      } else {
+        showStatus('有効なチャットURLを取得できませんでした（セッションでチャットを開いてから再試行してください）', 'error');
+      }
+    } catch (err) {
+      console.error('Failed to get session status:', err);
+      showStatus('URLの取得に失敗しました: ' + (err?.message || err), 'error');
+    } finally {
+      btnFillCurrentChatUrl.disabled = false;
+      btnFillCurrentChatUrl.textContent = '📍 今開いているチャットを登録';
+    }
+  });
+}
 
 const videoSettingsList = document.getElementById('video-settings-list');
 const btnAddVideo = document.getElementById('btn-add-video');
