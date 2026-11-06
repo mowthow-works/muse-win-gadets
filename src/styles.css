@@ -899,6 +899,7 @@ body.mode-mascot .avatar-column {
   cursor: grab;
   user-select: none;
   gap: 5px;
+  position: relative; /* 子要素の絶対配置の基準 (Issue #35/#36: 位置ブレ防止) */
 }
 
 body.mode-mascot .avatar-column:active {
@@ -1010,13 +1011,17 @@ body.mode-mascot .avatar-name.refreshing {
   100% { transform: scale(1); filter: brightness(1); }
 }
 
-/* アバターステータスピル (Issue #35) */
+/* アバターステータスピル (Issue #35: 絶対配置により出現時もアバター位置を完全固定) */
 .avatar-status-pill {
+  position: absolute;
+  top: calc(100% + 3px);
+  left: 50%;
+  transform: translateX(-50%);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 3px;
-  margin-top: 2px;
+  margin: 0;
   font-size: 9.5px;
   font-weight: 600;
   color: #38bdf8;
@@ -1026,12 +1031,14 @@ body.mode-mascot .avatar-name.refreshing {
   padding: 1.5px 8px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.65);
   letter-spacing: 0.2px;
-  max-width: 140px;
+  max-width: 150px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   animation: pulse-status 2.4s infinite ease-in-out;
-  transition: opacity 0.2s ease, transform 0.2s ease;
+  transition: opacity 0.2s ease;
+  pointer-events: none; /* ドラッグやクリックの邪魔にならないよう透過 */
+  z-index: 10;
 }
 
 .avatar-status-pill.hidden {

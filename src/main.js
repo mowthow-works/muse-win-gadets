@@ -491,8 +491,8 @@ function commitPendingAssistantMessage() {
   pendingAssistantText = null;
 
   recordInteraction();
-  // 回答完了の歓喜ポーズ（6秒間）
-  setAvatarState('milestone_level_up', { durationMs: 6000, force: true, lockDuration: true });
+  // Issue #36: 回答完了時の歓喜ポーズを廃止し、直接通常の待機状態(idle)へ戻す
+  setAvatarState('idle', { force: true });
   // 会話返答完了に伴い、最新の利用枠を自動再取得 (Issue #33)
   setTimeout(() => {
     loadUsageLimit(true);
@@ -1124,10 +1124,8 @@ async function syncAvatarStateWithMuse() {
         }
         // タッチリアクション中や3分放置アクション中は idle で上書きしない
         if (!isSpecialActionLocked) {
-          if (currentAvatarState === 'working' || currentAvatarState === 'making_something') {
-            // Muse本体の作業が完了して idle に戻った直後は 5 秒間歓喜ポーズを表示してから idle へ
-            setAvatarState('milestone_level_up', { durationMs: 5000, lockDuration: true, force: true });
-          } else if (currentAvatarState !== 'idle') {
+          // Issue #36: 作業完了時の歓喜ポーズを廃止し、直接通常の待機状態(idle)へ戻す
+          if (currentAvatarState !== 'idle') {
             setAvatarState('idle');
           }
         }
