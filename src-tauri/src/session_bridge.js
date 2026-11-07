@@ -927,6 +927,36 @@ window.__MUSE_BRIDGE__ = {
   },
 
   /**
+   * チャット画面の準備状態およびURL一致判定 (Issue #46)
+   */
+  async checkChatReady(expectedUrl) {
+    const getNormPath = (u) => {
+      try {
+        const parsed = new URL(u);
+        return (parsed.origin + parsed.pathname).replace(/\/+$/, '').toLowerCase();
+      } catch (_) {
+        return (u || '').trim().split('?')[0].split('#')[0].replace(/\/+$/, '').toLowerCase();
+      }
+    };
+    const currentNorm = getNormPath(window.location.href);
+    const { el: ta } = queryFirst(SELECTORS.chatInput);
+    const docReady = document.readyState === 'complete' || document.readyState === 'interactive';
+    const ready = docReady && !!ta && !ta.disabled;
+
+    let urlMatched = true;
+    if (expectedUrl) {
+      const expNorm = getNormPath(expectedUrl);
+      urlMatched = currentNorm === expNorm;
+    }
+
+    return {
+      ready,
+      urlMatched,
+      currentUrl: window.location.href
+    };
+  },
+
+  /**
    * Title Bridge アクション実行ディスパッチャー
    */
   async executeAction(action, args, nonce) {
@@ -948,6 +978,9 @@ window.__MUSE_BRIDGE__ = {
           break;
         case 'inspect_latest':
           result = await this.inspectLatestMessage();
+          break;
+        case 'check_chat_ready':
+          result = await this.checkChatReady(args?.expectedUrl);
           break;
         case 'send_message':
           result = await this.sendMessage(args?.text);

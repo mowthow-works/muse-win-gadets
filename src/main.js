@@ -320,6 +320,10 @@ function renderMascotOptions(options) {
   sessionBtn.addEventListener('click', async (e) => {
     e.stopPropagation();
     hideMascotBubble();
+    if (liveQuotesPrevChatUrl) {
+      isWakingForLiveQuotes = false;
+      await restoreSessionUrlAfterWake();
+    }
     await invoke('open_or_show_session');
   });
   footer.appendChild(sessionBtn);
@@ -351,6 +355,10 @@ async function handleSelectOption(optionText) {
 
   try {
     playLupinTyping(`「${optionText}」を送信中…`);
+    if (liveQuotesPrevChatUrl) {
+      isWakingForLiveQuotes = false;
+      await restoreSessionUrlAfterWake();
+    }
     await invoke('send_chat_message', { text: optionText });
   } catch (err) {
     console.error('Failed to send option:', err);
@@ -527,6 +535,10 @@ async function sendMascotQuickMessage() {
   hideMascotBubble();
 
   try {
+    if (liveQuotesPrevChatUrl) {
+      isWakingForLiveQuotes = false;
+      await restoreSessionUrlAfterWake();
+    }
     await invoke('send_chat_message', { text });
   } catch (err) {
     console.error('sendMascotQuickMessage error:', err);
@@ -583,13 +595,14 @@ function commitPendingAssistantMessage() {
   const isExtension = !!(lastCommittedAssistantText && textToPlay.startsWith(lastCommittedAssistantText));
   lastSeenAssistantText = textToPlay;
   lastCommittedAssistantText = textToPlay;
-  if (isLiveQuotesResponse(textToPlay)) {
+  if (isWakingForLiveQuotes || isLiveQuotesResponse(textToPlay)) {
     pendingAssistantText = null;
-    extractAndStoreLiveQuotes(textToPlay);
+    const count = extractAndStoreLiveQuotes(textToPlay);
     isWakingForLiveQuotes = false;
+    restoreSessionUrlAfterWake();
     setTimeout(() => {
       loadUsageLimit(true);
-    }, 2000);
+    }, 4000);
     return;
   }
   pendingAssistantText = null;
@@ -625,6 +638,7 @@ function setHealthPill(el, label, ok, detail) {
 }
 
 async function runHealthCheck() {
+  if (isNavigatingForWake || isWakingForLiveQuotes) return;
   try {
     const h = await invoke('check_bridge_health');
     if (!h) return;
@@ -726,7 +740,34 @@ let liveQuotesPool = {
   recent_shown: []
 };
 let isWakingForLiveQuotes = false;
+let isNavigatingForWake = false;
+let liveQuotesPrevChatUrl = null;
 let latestMuseSyncedState = 'idle';
+
+async function restoreSessionUrlAfterWake() {
+  if (!liveQuotesPrevChatUrl) return;
+  const targetUrl = liveQuotesPrevChatUrl;
+  liveQuotesPrevChatUrl = null;
+  isNavigatingForWake = true;
+  if (assistantCommitTimer) {
+    clearTimeout(assistantCommitTimer);
+    assistantCommitTimer = null;
+  }
+  pendingAssistantText = null;
+  try {
+    const navRes = await invoke('navigate_session', { url: targetUrl });
+    if (navRes && typeof navRes === 'object' && 'latestAssistant' in navRes) {
+      lastSeenAssistantText = navRes.latestAssistant || null;
+      lastCommittedAssistantText = navRes.latestAssistant || null;
+      pendingAssistantText = null;
+    }
+  } catch (e) {
+    console.warn('Failed to restore session url after wake:', e);
+  } finally {
+    isNavigatingForWake = false;
+    setTimeout(loadChatMessages, 1500);
+  }
+}
 
 function getTodayDateString() {
   const d = new Date();
@@ -822,15 +863,12 @@ function consumeOneLiveQuote() {
 
 function isLiveQuotesResponse(text) {
   if (!text || typeof text !== 'string') return false;
-  if (/mascot-quotes/i.test(text)) return true;
-  if (isWakingForLiveQuotes && (Date.now() - (Number(liveQuotesPool.last_wake_at) || 0) < 90000)) {
-    return true;
-  }
-  return false;
+  return /mascot-quotes/i.test(text);
 }
 
 function extractAndStoreLiveQuotes(text) {
   if (!text || typeof text !== 'string') return 0;
+  if (!/mascot-quotes/i.test(text)) return 0;
   pruneExpiredLiveQuotes();
 
   let bodyText = '';
@@ -838,12 +876,8 @@ function extractAndStoreLiveQuotes(text) {
   const fenceMatch = text.match(fenceRegex);
   if (fenceMatch && fenceMatch[1]) {
     bodyText = fenceMatch[1];
-  } else if (/mascot-quotes/i.test(text)) {
-    bodyText = text.replace(/^[\s\S]*?mascot-quotes\s*/i, '').replace(new RegExp(LIVE_QUOTES_FENCE + '[\\s\\S]*$'), '');
-  } else if (isWakingForLiveQuotes) {
-    bodyText = text;
   } else {
-    return 0;
+    bodyText = text.replace(/^[\s\S]*?mascot-quotes\s*/i, '').replace(new RegExp(LIVE_QUOTES_FENCE + '[\\s\\S]*$'), '');
   }
 
   const rawLines = bodyText.split(/\r?\n/);
@@ -962,6 +996,7 @@ async function maybeTriggerLiveQuotesWake() {
 
   // 全ガード条件成立 -> バックグラウンドウェイク実行
   isWakingForLiveQuotes = true;
+  isNavigatingForWake = true;
   liveQuotesPool.last_wake_at = now;
   liveQuotesPool.daily_wake_count += 1;
   await saveLiveQuotesPool();
@@ -969,20 +1004,49 @@ async function maybeTriggerLiveQuotesWake() {
   const prompt = buildLiveQuotesWakePrompt(lq.batch_count, getCurrentTimeSlot());
   const chatUrl = targetMode === 'custom' ? customUrl : null;
 
+  if (chatUrl) {
+    try {
+      const status = await invoke('get_session_status');
+      if (status && status.url && typeof status.url === 'string' && status.url.startsWith('https://')) {
+        const normStatus = status.url.trim().split('?')[0].split('#')[0].replace(/\/+$/, '').toLowerCase();
+        const normChat = chatUrl.trim().split('?')[0].split('#')[0].replace(/\/+$/, '').toLowerCase();
+        if (normStatus !== normChat) {
+          liveQuotesPrevChatUrl = status.url.trim();
+        } else {
+          liveQuotesPrevChatUrl = 'https://muse.ai/?__pwa=1';
+        }
+      } else {
+        liveQuotesPrevChatUrl = 'https://muse.ai/?__pwa=1';
+      }
+    } catch (e) {
+      console.warn('Failed to record prev session url:', e);
+      liveQuotesPrevChatUrl = 'https://muse.ai/?__pwa=1';
+    }
+  }
+
   try {
-    await invoke('send_live_quotes_wake', { text: prompt, chatUrl });
-    setTimeout(loadChatMessages, 2000);
-    setTimeout(loadChatMessages, 4500);
-    setTimeout(loadChatMessages, 8000);
-    setTimeout(loadChatMessages, 12000);
+    const wakeRes = await invoke('send_live_quotes_wake', { text: prompt, chatUrl });
+    if (wakeRes && typeof wakeRes === 'object' && 'preWakeAssistant' in wakeRes) {
+      lastSeenAssistantText = wakeRes.preWakeAssistant || '';
+      lastCommittedAssistantText = wakeRes.preWakeAssistant || '';
+      pendingAssistantText = null;
+    }
+    isNavigatingForWake = false;
+    setTimeout(loadChatMessages, 2500);
+    setTimeout(loadChatMessages, 5000);
+    setTimeout(loadChatMessages, 8500);
+    setTimeout(loadChatMessages, 12500);
   } catch (err) {
     console.warn('maybeTriggerLiveQuotesWake error:', err);
+    isNavigatingForWake = false;
     isWakingForLiveQuotes = false;
+    await restoreSessionUrlAfterWake();
   }
 
   setTimeout(() => {
     if (isWakingForLiveQuotes) {
       isWakingForLiveQuotes = false;
+      restoreSessionUrlAfterWake();
     }
   }, 45000);
 }
@@ -1503,6 +1567,7 @@ function checkIdleAction() {
 
 // Muse 本体のリアルタイム動作状態同期 (Issue #35)
 async function syncAvatarStateWithMuse() {
+  if (isNavigatingForWake) return;
   try {
     const res = await invoke('get_avatar_state');
     if (res) {
@@ -1557,10 +1622,14 @@ async function syncAvatarStateWithMuse() {
 // 2. チャットスレッド (R2)
 // ==========================================
 async function loadChatMessages() {
+  if (isNavigatingForWake) return;
   chatSyncIndicator.classList.add('syncing');
   try {
     const messages = await invoke('get_chat_messages', { limit: currentLimit });
-    renderMessages(messages);
+    if (isNavigatingForWake) return;
+    if (!isWakingForLiveQuotes) {
+      renderMessages(messages);
+    }
 
     // 新着アシスタントメッセージの検知 & 会話連動のアバター状態同期
     if (messages && messages.length > 0) {
@@ -1575,12 +1644,13 @@ async function loadChatMessages() {
         } else if (latestAssistant !== lastSeenAssistantText) {
           // 新着、またはストリーミング途中のメッセージを受信！
           pendingAssistantText = latestAssistant;
-          if (!isLiveQuotesResponse(latestAssistant)) recordInteraction();
+          const isWakeMsg = isWakingForLiveQuotes || isLiveQuotesResponse(latestAssistant);
+          if (!isWakeMsg) recordInteraction();
 
           // マスコットモード時は即座に吹き出しに最新返答テキストを表示（「考え中…」から最新回答へ即座に更新・シームレス追記）
-          // ただしセッション画面表示中はカタカタ音・吹き出し再生を抑止 (Issue #29)
+          // ただしセッション画面表示中やウェイク中はカタカタ音・吹き出し再生を抑止 (Issue #29, #46)
           if (document.body.classList.contains('mode-mascot') && !isSessionVisible) {
-            if (!isLiveQuotesResponse(latestAssistant)) playLupinTyping(latestAssistant, latestOptions);
+            if (!isWakeMsg) playLupinTyping(latestAssistant, latestOptions);
           }
 
           if (assistantCommitTimer) {
@@ -1668,6 +1738,12 @@ async function handleSendMessage() {
   btnSendMessage.disabled = true;
   recordInteraction();
   setAvatarState('working');
+
+  // ウェイク待機中などで専用チャットが開かれていた場合、最優先で直前のチャットへ復帰
+  if (liveQuotesPrevChatUrl) {
+    isWakingForLiveQuotes = false;
+    await restoreSessionUrlAfterWake();
+  }
 
   try {
     // 直前の自分メッセージを即時反映（楽観的UI）
@@ -1777,6 +1853,10 @@ async function toggleSessionWindow() {
       isSessionVisible = false;
     setTimeout(() => loadUsageLimit(false), 300);
     } else {
+      if (liveQuotesPrevChatUrl) {
+        isWakingForLiveQuotes = false;
+        await restoreSessionUrlAfterWake();
+      }
       hideMascotBubble();
       await invoke('open_or_show_session');
       isSessionVisible = true;
@@ -1824,6 +1904,10 @@ async function restoreFromMascot() {
   try {
     hideMascotBubble();
     clearUnreadBadge();
+    if (liveQuotesPrevChatUrl) {
+      isWakingForLiveQuotes = false;
+      await restoreSessionUrlAfterWake();
+    }
     isSessionVisible = true;
     // 中・小画面の代わりにセッションウィンドウ（公式画面）を前面表示
     await invoke('open_or_show_session');

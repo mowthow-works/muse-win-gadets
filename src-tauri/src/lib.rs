@@ -789,6 +789,69 @@ fn save_live_quotes(app: AppHandle, payload: serde_json::Value) -> Result<bool, 
     Ok(true)
 }
 
+fn extract_latest_assistant_text(messages_val: &serde_json::Value) -> Option<String> {
+    let arr = messages_val.as_array()?;
+    for item in arr.iter().rev() {
+        if item.get("role").and_then(|v| v.as_str()) == Some("assistant") {
+            if let Some(txt) = item.get("text").and_then(|v| v.as_str()) {
+                return Some(txt.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn normalize_url_for_compare(u: &str) -> String {
+    let base = u.trim().split('?').next().unwrap_or("").split('#').next().unwrap_or("");
+    base.trim_end_matches('/').to_lowercase()
+}
+
+async fn wait_for_chat_ready(
+    session: &WebviewWindow,
+    expected_url: Option<&str>,
+    timeout_ms: u64,
+    did_navigate: bool,
+) -> Result<bool, String> {
+    let start = Instant::now();
+    let timeout = Duration::from_millis(timeout_ms);
+
+    if did_navigate {
+        tokio::time::sleep(Duration::from_millis(2200)).await;
+    } else {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+
+    while start.elapsed() < timeout {
+        let check_res = run_bridge_action(
+            session,
+            "check_chat_ready",
+            &serde_json::json!({ "expectedUrl": expected_url }),
+            1500,
+        )
+        .await;
+
+        match check_res {
+            Ok(val) => {
+                let ready = val.get("ready").and_then(|v| v.as_bool()).unwrap_or(false);
+                let url_matched = val.get("urlMatched").and_then(|v| v.as_bool()).unwrap_or(false);
+                let cur_url = val.get("currentUrl").and_then(|v| v.as_str()).unwrap_or("");
+
+                if ready && url_matched {
+                    tokio::time::sleep(Duration::from_millis(400)).await;
+                    return Ok(true);
+                }
+            }
+            Err(e) => {
+            }
+        }
+
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+
+    let err_msg = format!("Timed out waiting for chat ready (expected: {:?})", expected_url);
+    Err(err_msg)
+}
+
 #[tauri::command]
 async fn send_live_quotes_wake(
     app: AppHandle,
@@ -800,21 +863,82 @@ async fn send_live_quotes_wake(
         let trimmed = url_str.trim();
         if trimmed.starts_with("https://") {
             let current_url = session.url().ok().map(|u| u.to_string()).unwrap_or_default();
-            if current_url != trimmed {
+            let norm_cur = normalize_url_for_compare(&current_url);
+            let norm_target = normalize_url_for_compare(trimmed);
+            if norm_cur != norm_target {
                 if let Ok(parsed_url) = trimmed.parse::<tauri::Url>() {
                     let _ = session.navigate(parsed_url);
-                    tokio::time::sleep(Duration::from_millis(2500)).await;
+                    wait_for_chat_ready(&session, Some(trimmed), 15000, true).await?;
+                } else {
+                    return Err(format!("Invalid custom_chat_url: {}", trimmed));
                 }
+            } else {
+                wait_for_chat_ready(&session, Some(trimmed), 5000, false).await?;
             }
         }
+    } else {
     }
-    run_bridge_action(
+
+    // 送信直前の最新アシスタントメッセージ（過去ログベースライン）を取得
+    let pre_msgs = run_bridge_action(
+        &session,
+        "get_messages",
+        &serde_json::json!({ "limit": 5 }),
+        3000,
+    )
+    .await
+    .ok();
+    let pre_wake_assistant = pre_msgs.as_ref().and_then(extract_latest_assistant_text);
+
+    let send_res = run_bridge_action(
         &session,
         "send_message",
         &serde_json::json!({ "text": text }),
         8000,
     )
+    .await?;
+
+    Ok(serde_json::json!({
+        "sendResult": send_res,
+        "preWakeAssistant": pre_wake_assistant
+    }))
+}
+
+#[tauri::command]
+async fn navigate_session(app: AppHandle, url: String) -> Result<serde_json::Value, String> {
+    let session = ensure_session_window(&app)?;
+    let trimmed = url.trim();
+    if trimmed.is_empty() {
+        return Ok(serde_json::json!({ "ok": false }));
+    }
+    let current_url = session.url().ok().map(|u| u.to_string()).unwrap_or_default();
+    let norm_cur = normalize_url_for_compare(&current_url);
+    let norm_target = normalize_url_for_compare(trimmed);
+    if norm_cur != norm_target {
+        if let Ok(parsed_url) = trimmed.parse::<tauri::Url>() {
+            let _ = session.navigate(parsed_url);
+            let _ = wait_for_chat_ready(&session, Some(trimmed), 15000, true).await;
+        } else {
+            return Err(format!("Invalid URL: {}", trimmed));
+        }
+    } else {
+        let _ = wait_for_chat_ready(&session, Some(trimmed), 5000, false).await;
+    }
+
+    let post_msgs = run_bridge_action(
+        &session,
+        "get_messages",
+        &serde_json::json!({ "limit": 5 }),
+        3000,
+    )
     .await
+    .ok();
+    let latest_assistant = post_msgs.as_ref().and_then(extract_latest_assistant_text);
+
+    Ok(serde_json::json!({
+        "ok": true,
+        "latestAssistant": latest_assistant
+    }))
 }
 
 #[tauri::command]
@@ -2158,6 +2282,7 @@ pub fn run() {
             get_live_quotes,
             save_live_quotes,
             send_live_quotes_wake,
+            navigate_session,
             open_avatar_dir,
             open_settings_window,
             close_settings_window,

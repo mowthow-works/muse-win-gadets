@@ -1,6 +1,6 @@
 # Muse Desktop Mascot
 
-[![Release](https://img.shields.io/badge/version-v1.1.1-blue.svg)](https://github.com/mowthow-works/muse-win-gadets/releases)
+[![Release](https://img.shields.io/badge/version-v1.1.2-blue.svg)](https://github.com/mowthow-works/muse-win-gadets/releases)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D6.svg)](https://www.microsoft.com/windows)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -127,7 +127,7 @@ Muse（パーソナルAIエージェント `https://muse.ai`）の Windows 向�
 IDLE 中のセリフを、固定の `quotes.json` だけでなく **Muse 本人がその場で生成した一言** にできます。
 
 - マスコットが待機状態のときだけ、アプリが Muse のチャットへ短い作成依頼（ウェイク）を送り、返ってきた一言をプールに貯めて IDLE アクションで表示します
-- 取得先は **メインチャット**（普段のチャット。そのまま使えて文脈の濃い一言になりやすい）か **専用チャット**（URL を設定に登録。普段のスレッドを汚さない）から選べます
+- 取得先は **メインチャット**（普段のチャット。そのまま使えて文脈の濃い一言になりやすい）か **専用チャット**（URL を設定に登録。普段のスレッドを汚さない。ウェイク完了後はウェイク前に開いていたチャットへ自動復帰）から選べます
 - 実行中の会話を割り込まないよう、Muse が IDLE のときだけ取得します。取得間隔の下限（既定 60 分）、1 日の上限（既定 6 回）、静かな時間帯（既定 22:00〜07:00）も設定できます
 - プールのセリフは 24 時間で破棄され、表示すると消費されます。プールが空の間は従来の固定セリフが表示されます
 
