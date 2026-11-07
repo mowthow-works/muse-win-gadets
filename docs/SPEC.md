@@ -69,14 +69,16 @@ Muse Desktop Mascot は、パーソナル AI エージェント Muse（`https://
 
 ### 3.3 ファイル配置
 
-| 対象 | 開発時 | 配布版 |
-| :--- | :--- | :--- |
-| アバター動画・設定 | `src-tauri/assets/avatars/` | `.exe` と同じフォルダの `avatars/`、または `%LOCALAPPDATA%\works.mowthow.muse.gadgets\avatars\` |
-| セッション Cookie | — | アプリ専用ローカルフォルダ `webview2_session` |
-| ライブプール | `avatars/plugin/live_quotes.json` | 同左 |
+| 対象 | 開発時 | 配布版（通常） | 配布版（ポータブル） |
+| :--- | :--- | :--- | :--- |
+| アバター動画・設定・セリフ | `src-tauri/assets/avatars/` | `%LOCALAPPDATA%\works.mowthow.muse.gadgets\avatars\`（永続領域） | `.exe` と同じフォルダの `avatars/` |
+| セッション Cookie | — | アプリ専用ローカルフォルダ `webview2_session` | 同左 |
+| ライブプール | `avatars/plugin/live_quotes.json` | `%LOCALAPPDATA%\works.mowthow.muse.gadgets\avatars\plugin\live_quotes.json` | `avatars/plugin/live_quotes.json` |
 
-- 同梱されるのは `setting.json` と `quotes.json` のみで、アバター動画（`.mp4`）は含めない（著作権と汎用性への配慮）。
-- `setting.json` と `quotes.json` はアプリ起動中でも保存から 3 秒以内に自動反映される（ホットリロード）。
+- インストーラ（NSIS）によるアップデート時（旧バージョンアンインストール処理）にユーザー設定や動画ファイルが全消失するのを防ぐため、通常モードの書き込み・読み込み最優先先は OS の永続ユーザーデータ領域（`%LOCALAPPDATA%\works.mowthow.muse.gadgets\avatars\`）となります。
+- 実行ファイルと同階層に `portable`（ファイルまたはフォルダ）が存在する場合のみ、ポータブルモードとしてローカルの `avatars/` フォルダを最優先で使用します。
+- 配布パッケージに初期同梱されるのは `setting.json` と `quotes.json` のみで、アバター動画（`.mp4`）は含めません（著作権と汎用性への配慮）。ユーザーデータ領域に設定ファイルが存在しない場合、初回起動時に初期テンプレートが自動シード配置されます。
+- `setting.json` と `quotes.json` はアプリ起動中でも保存から 3 秒以内に自動反映されます（ホットリロード）。
 
 ## 4. 起動とライフサイクル
 

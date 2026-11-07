@@ -562,30 +562,42 @@ async fn run_bridge_action(
 // Tauri コマンド群
 // ==========================================
 
-fn get_writable_avatar_dir(app: &AppHandle) -> PathBuf {
-    // 1. 実行ファイルと同じ階層の avatars (インストールフォルダ または ポータブル配布フォルダ)
+fn is_portable_mode() -> bool {
     if let Ok(exe_path) = std::env::current_exe() {
         if let Some(exe_dir) = exe_path.parent() {
-            let exe_str = exe_dir.to_string_lossy().to_lowercase();
-            // Cargo 開発用ビルド出力ディレクトリ (target\debug, target\release) でない場合はインストールフォルダを最優先
-            let is_cargo_target = exe_str.contains("target\\debug") || exe_str.contains("target\\release");
-            if !is_cargo_target {
+            if exe_dir.join("portable").exists()
+                || exe_dir.join("portable.txt").exists()
+                || exe_dir.join(".portable").exists()
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn get_writable_avatar_dir(app: &AppHandle) -> PathBuf {
+    // 1. ポータブルモード指定時 (exeと同階層に portable マーカーが存在する場合)
+    if is_portable_mode() {
+        if let Ok(exe_path) = std::env::current_exe() {
+            if let Some(exe_dir) = exe_path.parent() {
                 return exe_dir.join("avatars");
             }
         }
     }
 
-    // 2. 開発時: src-tauri/assets/avatars
+    // 2. 通常動作: OS ユーザー永続データ領域 (%LOCALAPPDATA%\works.mowthow.muse.gadgets\avatars)
+    //    インストーラによるアンインストール・アップデートでも永続保持される
+    if let Ok(local_dir) = app.path().app_local_data_dir() {
+        return local_dir.join("avatars");
+    }
+
+    // 3. 開発環境フォールバック: src-tauri/assets/avatars
     let manifest_avatars = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("assets")
         .join("avatars");
     if manifest_avatars.exists() {
         return manifest_avatars;
-    }
-
-    // 3. フォールバック: %LOCALAPPDATA%\works.mowthow.muse.gadgets\avatars
-    if let Ok(local_dir) = app.path().app_local_data_dir() {
-        return local_dir.join("avatars");
     }
 
     PathBuf::from("avatars")
@@ -614,33 +626,31 @@ fn ensure_avatar_seeds(app: &AppHandle) {
 fn collect_avatar_dirs(app: &AppHandle) -> Vec<PathBuf> {
     let mut avatar_dirs: Vec<PathBuf> = Vec::new();
 
-    // 1. 実行ファイルと同じ階層の avatars フォルダ (インストール先 / ポータブル最優先)
+    // 1. 最優先: 書き込み可能アバターディレクトリ (%LOCALAPPDATA%、またはポータブル時は exe 同階層)
+    let writable = get_writable_avatar_dir(app);
+    if writable.exists() && !avatar_dirs.contains(&writable) {
+        avatar_dirs.push(writable.clone());
+    }
+
+    // 2. 実行ファイルと同じ階層の avatars フォルダ (通常モード時でも exe 隣に動画等がある場合の探索)
     if let Ok(exe_path) = std::env::current_exe() {
         if let Some(exe_dir) = exe_path.parent() {
             let exe_avatars = exe_dir.join("avatars");
-            if exe_avatars.exists() {
+            if exe_avatars.exists() && !avatar_dirs.contains(&exe_avatars) {
                 avatar_dirs.push(exe_avatars);
             }
         }
     }
 
-    // 2. resource_dir (NSIS インストーラ同梱リソース)
+    // 3. resource_dir (NSIS インストーラ同梱リソース)
     if let Ok(res_dir) = app.path().resource_dir() {
         let r1 = res_dir.join("assets").join("avatars");
-        if r1.exists() {
+        if r1.exists() && !avatar_dirs.contains(&r1) {
             avatar_dirs.push(r1);
         }
         let r2 = res_dir.join("avatars");
-        if r2.exists() {
+        if r2.exists() && !avatar_dirs.contains(&r2) {
             avatar_dirs.push(r2);
-        }
-    }
-
-    // 3. %LOCALAPPDATA%\works.mowthow.muse.gadgets\avatars
-    if let Ok(local_dir) = app.path().app_local_data_dir() {
-        let appdata_avatars = local_dir.join("avatars");
-        if appdata_avatars.exists() {
-            avatar_dirs.push(appdata_avatars);
         }
     }
 
@@ -650,6 +660,10 @@ fn collect_avatar_dirs(app: &AppHandle) -> Vec<PathBuf> {
         .join("avatars");
     if manifest_avatars.exists() && !avatar_dirs.contains(&manifest_avatars) {
         avatar_dirs.push(manifest_avatars);
+    }
+
+    if !avatar_dirs.contains(&writable) {
+        avatar_dirs.insert(0, writable);
     }
 
     avatar_dirs
@@ -834,15 +848,13 @@ async fn wait_for_chat_ready(
             Ok(val) => {
                 let ready = val.get("ready").and_then(|v| v.as_bool()).unwrap_or(false);
                 let url_matched = val.get("urlMatched").and_then(|v| v.as_bool()).unwrap_or(false);
-                let cur_url = val.get("currentUrl").and_then(|v| v.as_str()).unwrap_or("");
-
+                
                 if ready && url_matched {
                     tokio::time::sleep(Duration::from_millis(400)).await;
                     return Ok(true);
                 }
             }
-            Err(e) => {
-            }
+            Err(_) => {}
         }
 
         tokio::time::sleep(Duration::from_millis(500)).await;

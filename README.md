@@ -116,7 +116,7 @@ Muse（パーソナルAIエージェント `https://muse.ai`）の Windows 向�
 
 - **GUI 設定画面**：トレイメニューの「設定...」から、動作タイマー（放置時間・吹き出し秒数等）、放置動画ごとの有効/無効、セリフの追加・編集が行えます
 - **ホットリロード**：`setting.json` と `quotes.json` は、アプリ起動中でも保存するだけで 3 秒以内に自動反映されます
-- **動画の配置先**：基本動画 5 種類（`idle` / `waking` / `working` / `making_something` / `milestone_level_up`）は `avatars/` 直下、放置アクション用は `avatars/plugin/` フォルダへ
+- **動画の配置先**：設定画面（「フォルダ・データ管理」タブ）の「フォルダを開く」からアクセスできます。アプリアップデート時の動画・設定消失を防ぐため、通常は OS の永続データ領域（`%LOCALAPPDATA%\works.mowthow.muse.gadgets\avatars\`）が使用されます。基本動画 5 種類（`idle` / `waking` / `working` / `making_something` / `milestone_level_up`）は `avatars/` 直下、放置アクション用は `avatars/plugin/` フォルダへ配置してください（実行ファイル階層に `portable` ファイルを置くことでローカルの `avatars/` を使うポータブル運用も可能）
 
 動画の取得・配置手順、`setting.json` / `quotes.json` の全項目リファレンス、トレイメニューの全項目、開発者ツールの活用例は **[カスタマイズガイド](docs/CUSTOMIZE.md)** を参照してください。
 

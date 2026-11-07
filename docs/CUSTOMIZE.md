@@ -12,7 +12,7 @@ Muse Desktop Mascot の詳細なカスタマイズ方法をまとめたリファ
 
 ## 1. アバター動画の準備と配置
 
-配置先フォルダは、開発時は `src-tauri/assets/avatars/`、配布版では `.exe` と同じフォルダの `avatars/` または `%LOCALAPPDATA%\works.mowthow.muse.gadgets\avatars\` です。
+配置先フォルダは、設定画面（「フォルダ・データ管理」タブ）の「フォルダを開く」からワンクリックで開くことができます。アプリアップデート時の動画・設定消失を防ぐため、通常は OS の永続データ領域（`%LOCALAPPDATA%\works.mowthow.muse.gadgets\avatars\`）が使用されます（実行ファイルと同階層に `portable` ファイルを置いた場合のみローカルの `avatars/` を使用）。
 
 ### ステップ 1: 基本ステータス動画（5種類）
 
