@@ -273,7 +273,7 @@ window.__MUSE_BRIDGE__ = {
           if (isInsideChat(e)) return false;
           const t = (e.textContent || '').trim();
           if (t.length === 0 || t.length > 20) return false;
-          return /動作中|リンク済み|考え中|作業中|実行中|オンライン|待機中|オフライン/i.test(t);
+          return /動作中|リンク済み|考え中|思考|作業中|実行中|作成|生成|構築|描画|検索|調査|確認|返信|オンライン|待機中|オフライン|working|thinking|making|generating|searching/i.test(t);
         });
         if (candidates.length > 0) {
           statusEl = candidates[0];
@@ -565,7 +565,7 @@ window.__MUSE_BRIDGE__ = {
       if (!isUser) {
         options = extractOptions(el);
         // 本文末尾にボタンのテキストが混入している場合はクリーンアップ
-        for (const opt of options) {
+        for (const opt of [...options].reverse()) {
           if (text.endsWith(opt)) {
             text = text.slice(0, -opt.length).trim();
           }

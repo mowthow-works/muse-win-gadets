@@ -177,6 +177,17 @@ npm install
 npm run dev
 ```
 
+### 自動テストの実行
+```powershell
+# 全3層テスト（Vitest単体 + Playwright E2E + Rust単体）の一括実行
+npm test
+
+# 個別実行
+npm run test:unit   # フロントエンド＆ブリッジ単体テスト (Vitest + jsdom)
+npm run test:e2e    # 実ブラウザUI・レイアウト回帰テスト (Playwright + Edge)
+npm run test:rust   # Rustバックエンド単体テスト (cargo test)
+```
+
 ### プロダクションビルド
 
 ポータブル単体実行ファイル（手動配置・ZIP 配布向け）：

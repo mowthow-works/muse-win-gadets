@@ -31,3 +31,10 @@ src-tauri/assets/avatars/plugin/*.mp4
 *.njsproj
 *.sln
 *.sw?
+
+
+# Automated test outputs
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/

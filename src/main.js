@@ -1691,7 +1691,7 @@ async function loadChatMessages() {
 }
 
 function renderMessages(messages) {
-  if (!messages || messages.length === 0) {
+  if (!Array.isArray(messages) || messages.length === 0) {
     showEmptyPlaceholder('メッセージはまだありません。');
     return;
   }

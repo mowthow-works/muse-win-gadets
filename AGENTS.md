@@ -43,3 +43,23 @@
   - ビルド時間の短縮のため、**Debug ビルド（`cargo build`）** で実施し、生成された `src-tauri/target/debug/muse-desktop-mascot.exe` を `dist/muse-desktop-mascot.exe` へ配置して動作確認を行うこと（配布用 ZIP やインストーラの作成はスキップ）。
 - **Release 時（`main` ブランチへマージする直前）**:
   - バージョンの全機能が揃い、ユーザーから「Releaseします！」と指示された `main` マージ直前のタイミングでのみ、**Release ビルドおよびインストーラ作成（`npm run build:installer` / `npx tauri build`）** を行い、最適化された `.exe` を `dist/` へ上書き配置し、配布用 ZIP アーカイブ（`muse-desktop-mascot-v*.zip`）および NSIS セットアップインストーラを作成・Release へ添付すること。通常開発時はインストーラ作成を行わないこと。
+
+
+---
+
+## 5. デグレード防止・3層自動テスト運用ルール
+
+機能追加やバグ修正に伴うデグレード（既存機能の破損・UIレイアウト崩れ・DOM抽出ミス等）を防止するため、以下の **3層自動テストスイート** を整備しています。
+
+- **第1層：Rust バックエンド単体テスト (`npm run test:rust`)**
+  - 対象: `src-tauri/src/lib.rs`（設定互換性、AppDataシード・プラグイン動画収集、URL正規化、異常座標ガード等）
+- **第2層：フロントエンド＆ブリッジ単体テスト (`npm run test:unit`)**
+  - 対象: `tests/unit/session_bridge.test.js`, `tests/unit/main_logic.test.js`（Vitest + jsdom による Muse DOM 解析・選択肢抽出・利用枠算出・IME二重送信防止・ライブつぶやき抽出等の検証）
+- **第3層：Playwright 実ブラウザ UI / レイアウト回帰テスト (`npm run test:e2e`)**
+  - 対象: `tests/e2e/mascot.spec.js`（Microsoft Edge ヘッドレスエンジン上で `src/index.html`・`src/settings.html` を実描画し、ステータスピル表示時のアバター位置ブレ 0px 検証やスケール切替・選択肢返信・設定保存を E2E 検証）
+
+### 必須運用ルール
+1. **動作確認依頼前の全テスト実行必須**
+   - コード（`.rs`, `.js`, `.html`, `.css`）を変更した場合は、ユーザーへ動作確認を依頼する前に **必ず `npm test`（全3層一括テスト）を実行し、全テストがパスすることを確認** すること。
+2. **バグ修正時の再発防止テスト追加**
+   - 新たな不具合やデグレードを修正する際は、原則としてその不具合を再現・検証するテストケースを `tests/unit/`、`tests/e2e/`、または `src-tauri/src/lib.rs` のいずれかに追加すること。

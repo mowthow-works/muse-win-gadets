@@ -2326,3 +2326,225 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
+
+
+pub fn ensure_avatar_seeds_in_dir(base_dir: &std::path::Path) {
+    let _ = fs::create_dir_all(base_dir);
+
+    let setting_path = base_dir.join("setting.json");
+    if !setting_path.exists() {
+        let _ = fs::write(&setting_path, EMBEDDED_SETTING_JSON);
+    }
+
+    let plugin_dir = base_dir.join("plugin");
+    let _ = fs::create_dir_all(&plugin_dir);
+    let quotes_path = plugin_dir.join("quotes.json");
+    if !quotes_path.exists() {
+        let _ = fs::write(&quotes_path, EMBEDDED_QUOTES_JSON);
+    }
+}
+
+pub fn collect_plugins_from_dirs(avatar_dirs: &[PathBuf]) -> Vec<PluginVideoItem> {
+    let mut plugins: Vec<PluginVideoItem> = Vec::new();
+    let mut loaded_plugin_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for d in avatar_dirs {
+        let pdir = d.join("plugin");
+        if pdir.exists() && pdir.is_dir() {
+            if let Ok(entries) = fs::read_dir(&pdir) {
+                let mut mp4_paths: Vec<PathBuf> = entries
+                    .filter_map(|e| e.ok().map(|de| de.path()))
+                    .filter(|p| {
+                        p.is_file()
+                            && p.extension()
+                                .and_then(|ext| ext.to_str())
+                                .map(|ext| ext.eq_ignore_ascii_case("mp4"))
+                                .unwrap_or(false)
+                    })
+                    .collect();
+                mp4_paths.sort();
+
+                for path in mp4_paths {
+                    let Some(file_name) = path.file_name().and_then(|n| n.to_str()).map(|s| s.to_string()) else {
+                        continue;
+                    };
+
+                    if loaded_plugin_names.contains(&file_name) {
+                        continue;
+                    }
+
+                    if let Ok(bytes) = fs::read(&path) {
+                        if !bytes.is_empty() {
+                            let data_url =
+                                format!("data:video/mp4;base64,{}", BASE64_STANDARD.encode(&bytes));
+                            loaded_plugin_names.insert(file_name.clone());
+                            plugins.push(PluginVideoItem {
+                                name: file_name,
+                                data_url,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+    plugins
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_gadget_config_default_and_legacy_deserialization() {
+        let def = GadgetConfig::default();
+        assert_eq!(def.size_mode, "mascot");
+        assert_eq!(def.last_normal_mode, "small");
+        assert_eq!(def.message_limit, 5);
+        assert_eq!(def.avatar_name, "ラッキー");
+        assert_eq!(def.mascot_scale, "standard");
+        assert!(def.mascot_bubble_on_left);
+
+        // 旧バージョンの設定JSON（新規フィールド欠落）からのデシリアライズ互換性検証
+        let legacy_json = r#"{
+            "size_mode": "small",
+            "message_limit": 10,
+            "hotkey": "Ctrl+Shift+M",
+            "last_limit_info": null
+        }"#;
+        let parsed: GadgetConfig = serde_json::from_str(legacy_json).expect("legacy json should parse");
+        assert_eq!(parsed.size_mode, "small");
+        assert_eq!(parsed.last_normal_mode, "small");
+        assert_eq!(parsed.message_limit, 10);
+        assert_eq!(parsed.avatar_name, "ラッキー");
+        assert_eq!(parsed.mascot_scale, "standard");
+        assert!(parsed.mascot_bubble_on_left);
+        assert!(parsed.mascot_pos.is_none());
+    }
+
+    #[test]
+    fn test_mascot_dimensions_and_avatar_size() {
+        assert_eq!(get_mascot_dimensions("small"), (496.0, 208.0, 0.8));
+        assert_eq!(get_mascot_dimensions("standard"), (620.0, 260.0, 1.0));
+        assert_eq!(get_mascot_dimensions("large"), (775.0, 325.0, 1.25));
+        assert_eq!(get_mascot_dimensions("unknown"), (620.0, 260.0, 1.0));
+
+        assert_eq!(get_mascot_avatar_size("small"), 93.0);
+        assert_eq!(get_mascot_avatar_size("standard"), 116.0);
+        assert_eq!(get_mascot_avatar_size("large"), 145.0);
+    }
+
+    #[test]
+    fn test_last_mascot_pos_ignores_invalid_minimized_coordinates() {
+        // Issue #30: Windows最小化時の -32000 等の異常座標で上書きされないことを検証
+        set_last_mascot_pos((450, 620));
+        assert_eq!(get_last_mascot_pos(), Some((450, 620)));
+
+        set_last_mascot_pos((-32000, -32000));
+        assert_eq!(get_last_mascot_pos(), Some((450, 620)));
+    }
+
+    #[test]
+    fn test_normalize_url_for_compare() {
+        // Issue #46: 専用チャットURL比較時のクエリ・ハッシュ・末尾スラッシュ正規化検証
+        assert_eq!(
+            normalize_url_for_compare("https://muse.ai/chat/abc-123/?__pwa=1#bottom"),
+            "https://muse.ai/chat/abc-123"
+        );
+        assert_eq!(
+            normalize_url_for_compare("  HTTPS://MUSE.AI/Chat/Abc-123/// "),
+            "https://muse.ai/chat/abc-123"
+        );
+    }
+
+    #[test]
+    fn test_extract_latest_assistant_text() {
+        let msgs = serde_json::json!([
+            { "role": "user", "text": "こんにちは" },
+            { "role": "assistant", "text": "最初の返答" },
+            { "role": "user", "text": "次の質問" },
+            { "role": "assistant", "text": "最新の返答です！" }
+        ]);
+        assert_eq!(
+            extract_latest_assistant_text(&msgs),
+            Some("最新の返答です！".to_string())
+        );
+
+        let user_only = serde_json::json!([
+            { "role": "user", "text": "まだ返答なし" }
+        ]);
+        assert_eq!(extract_latest_assistant_text(&user_only), None);
+    }
+
+    #[test]
+    fn test_parse_bridge_payload() {
+        let ok_val = serde_json::json!({
+            "ok": true,
+            "data": { "state": "working" }
+        });
+        let res = parse_bridge_payload(ok_val).expect("should succeed");
+        assert_eq!(res.get("state").and_then(|v| v.as_str()), Some("working"));
+
+        let err_val = serde_json::json!({
+            "ok": false,
+            "error": "UNSUPPORTED_DOM: element not found"
+        });
+        let err = parse_bridge_payload(err_val).expect_err("should fail");
+        assert!(err.contains("UNSUPPORTED_DOM"));
+    }
+
+    #[test]
+    fn test_embedded_json_validity() {
+        let setting: serde_json::Value =
+            serde_json::from_str(EMBEDDED_SETTING_JSON).expect("EMBEDDED_SETTING_JSON must be valid JSON");
+        assert!(setting.get("idle_threshold_sec").is_some());
+
+        let quotes: serde_json::Value =
+            serde_json::from_str(EMBEDDED_QUOTES_JSON).expect("EMBEDDED_QUOTES_JSON must be valid JSON");
+        assert!(quotes.get("touch_reactions").is_some());
+        assert!(quotes.get("default_idle_quotes").is_some());
+        assert!(quotes.get("videos").is_some());
+    }
+
+    #[test]
+    fn test_seed_and_multi_dir_plugin_collection() {
+        // Issue #38, #47: AppData優先シード生成と複数フォルダからのプラグイン動画マージ（同名重複排除）検証
+        let tmp_base = std::env::temp_dir().join(format!("muse_mascot_test_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp_base);
+
+        let dir_appdata = tmp_base.join("appdata_avatars");
+        let dir_fallback = tmp_base.join("fallback_avatars");
+
+        ensure_avatar_seeds_in_dir(&dir_appdata);
+        assert!(dir_appdata.join("setting.json").exists());
+        assert!(dir_appdata.join("plugin").join("quotes.json").exists());
+
+        let p1 = dir_appdata.join("plugin");
+        let p2 = dir_fallback.join("plugin");
+        fs::create_dir_all(&p1).unwrap();
+        fs::create_dir_all(&p2).unwrap();
+
+        // dir_appdata に eating.mp4 ("custom_eating")
+        fs::write(p1.join("eating.mp4"), b"custom_eating").unwrap();
+        // dir_fallback に eating.mp4 ("default_eating") と sleeping.mp4 ("default_sleeping")
+        fs::write(p2.join("eating.mp4"), b"default_eating").unwrap();
+        fs::write(p2.join("sleeping.mp4"), b"default_sleeping").unwrap();
+        // 空ファイルは無視されるべき
+        fs::write(p2.join("empty.mp4"), b"").unwrap();
+
+        let collected = collect_plugins_from_dirs(&[dir_appdata.clone(), dir_fallback.clone()]);
+        assert_eq!(collected.len(), 2);
+
+        let eating = collected.iter().find(|i| i.name == "eating.mp4").expect("eating.mp4 should exist");
+        let sleeping = collected.iter().find(|i| i.name == "sleeping.mp4").expect("sleeping.mp4 should exist");
+
+        // 優先ディレクトリ(dir_appdata)の eating.mp4 が採用されていること
+        let expected_eating = format!("data:video/mp4;base64,{}", BASE64_STANDARD.encode(b"custom_eating"));
+        assert_eq!(eating.data_url, expected_eating);
+
+        // 第2ディレクトリ(dir_fallback)の sleeping.mp4 もマージ収集されていること
+        let expected_sleeping = format!("data:video/mp4;base64,{}", BASE64_STANDARD.encode(b"default_sleeping"));
+        assert_eq!(sleeping.data_url, expected_sleeping);
+
+        let _ = fs::remove_dir_all(&tmp_base);
+    }
+}

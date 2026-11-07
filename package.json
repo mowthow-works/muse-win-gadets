@@ -10,9 +10,16 @@
     "build": "tauri build",
     "build:debug": "tauri build --debug",
     "build:installer": "tauri build",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "test:unit": "vitest run",
+    "test:e2e": "playwright test",
+    "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml",
+    "test": "npm run test:unit && npm run test:e2e && npm run test:rust"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2"
+    "@playwright/test": "^1.65.0",
+    "@tauri-apps/cli": "^2",
+    "jsdom": "^31.0.0",
+    "vitest": "^5.1.0"
   }
 }
