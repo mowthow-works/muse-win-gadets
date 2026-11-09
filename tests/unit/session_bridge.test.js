@@ -16,6 +16,8 @@ describe('session_bridge.js DOM Scraping & Guardrails Suite', () => {
     delete window.__MUSE_CACHED_LIMIT__;
     delete window.__MUSE_CACHED_AVATAR_NAME__;
     delete window.__MUSE_BLOB_STATE_MAP__;
+    delete window.__MUSE_SESSION_VISIBLE__;
+    delete window.__MUSE_FETCHING_LIMIT__;
     if (window.__MUSE_PASSIVE_WATCHER__) {
       clearInterval(window.__MUSE_PASSIVE_WATCHER__);
       delete window.__MUSE_PASSIVE_WATCHER__;
@@ -184,5 +186,182 @@ describe('session_bridge.js DOM Scraping & Guardrails Suite', () => {
     const readyDiff = await window.__MUSE_BRIDGE__.checkChatReady('https://muse.ai/chat/other-thread-999');
     expect(readyDiff.ready).toBe(true);
     expect(readyDiff.urlMatched).toBe(false);
+  });
+
+  it('fetchUsageLimit (Issue #49): 設定クリック後に非同期でモーダル・一般タブ・利用枠DOMが遅延描画される場合でもポーリング待機で確実に取得しモーダルを閉じる', async () => {
+    let settingsClicked = false;
+    let generalTabClicked = false;
+    let modalClosed = false;
+
+    document.body.innerHTML = `
+      <main>
+        <button title="設定" id="btn-settings">⚙️</button>
+        <textarea placeholder="メッセージを入力"></textarea>
+      </main>
+      <div id="modal-root"></div>
+    `;
+
+    const settingsBtn = document.getElementById('btn-settings');
+    settingsBtn.addEventListener('click', () => {
+      if (settingsClicked) return;
+      settingsClicked = true;
+      // 60ms 後にモーダルと「一般」タブが非同期出現
+      setTimeout(() => {
+        const modalRoot = document.getElementById('modal-root');
+        modalRoot.innerHTML = `
+          <div role="dialog" id="settings-dialog">
+            <button role="tab" id="tab-general">一般</button>
+            <button aria-label="閉じる" id="btn-close-modal">×</button>
+            <div id="tab-panel">読み込み中...</div>
+          </div>
+        `;
+        const tabGeneral = document.getElementById('tab-general');
+        tabGeneral.addEventListener('click', () => {
+          if (generalTabClicked) return;
+          generalTabClicked = true;
+          // タブクリックからさらに 120ms 後に API レスポンスによる利用枠が非同期描画
+          setTimeout(() => {
+            const panel = document.getElementById('tab-panel');
+            if (panel) {
+              panel.innerHTML = `
+                <span class="text-body text-text-primary">無料プラン</span>
+                <div><span>42%</span> <span>使用済み</span></div>
+                <p>1週間の上限は11月20日にリセットされます</p>
+              `;
+            }
+          }, 120);
+        });
+
+        const closeBtn = document.getElementById('btn-close-modal');
+        closeBtn.addEventListener('click', () => {
+          modalClosed = true;
+        });
+      }, 60);
+    });
+
+    const res = await window.__MUSE_BRIDGE__.fetchUsageLimit(false, {
+      pollIntervalMs: 30,
+      maxTabWaitMs: 500,
+      maxLimitWaitMs: 1000,
+      closeWaitMs: 20,
+      navWaitMs: 20,
+    });
+
+    expect(settingsClicked).toBe(true);
+    expect(generalTabClicked).toBe(true);
+    expect(modalClosed).toBe(true);
+    expect(res.plan_name).toBe('無料プラン');
+    expect(res.used_percent).toBe(42);
+    expect(res.remaining_percent).toBe(58);
+    expect(res.reset_text).toBe('1週間の上限は11月20日にリセットされます');
+    expect(window.__MUSE_CACHED_LIMIT__).toEqual(res);
+  });
+
+  it('scanDomForLimit (Issue #49): プログレスバーのstyle幅や分割ノードから利用枠を正確に抽出する', () => {
+    document.body.innerHTML = `
+      <div role="dialog">
+        <span class="plan-badge">Free Plan</span>
+        <div class="progress-track">
+          <div class="progress-fill" style="width: 28%;"></div>
+        </div>
+        <div>残り 72%</div>
+        <div>リセット: 11月21日</div>
+      </div>
+    `;
+
+    const res = window.__MUSE_BRIDGE__.scanDomForLimit();
+    expect(res).not.toBeNull();
+    expect(res.plan_name).toBe('Free Plan');
+    expect(res.remaining_percent).toBe(72);
+    expect(res.used_percent).toBe(28);
+    expect(res.reset_text).toBe('リセット: 11月21日');
+  });
+
+  it('fetchUsageLimit (Issue #49 ガードレール): 既に設定ダイアログが開いている状態では値を読み取るのみで絶対に勝手に閉じない', async () => {
+    let closeClicked = false;
+    let escapeDispatched = false;
+
+    document.body.innerHTML = `
+      <div role="dialog" id="user-opened-dialog">
+        <button aria-label="閉じる" id="btn-close-dialog">×</button>
+        <div id="dialog-content">設定メニュー表示中...</div>
+      </div>
+    `;
+
+    document.getElementById('btn-close-dialog').addEventListener('click', () => {
+      closeClicked = true;
+    });
+    const onKeyDown = (e) => {
+      if (e.key === 'Escape') escapeDispatched = true;
+    };
+    document.addEventListener('keydown', onKeyDown);
+
+    // 50ms 後にユーザーが一般タブを開いて利用枠が描画されたケース
+    setTimeout(() => {
+      const content = document.getElementById('dialog-content');
+      if (content) {
+        content.innerHTML = `<p>25% 使用済み</p>`;
+      }
+    }, 50);
+
+    const res = await window.__MUSE_BRIDGE__.fetchUsageLimit(false, {
+      pollIntervalMs: 25,
+      maxTabWaitMs: 300,
+    });
+
+    document.removeEventListener('keydown', onKeyDown);
+
+    expect(res.used_percent).toBe(25);
+    expect(res.remaining_percent).toBe(75);
+    expect(closeClicked).toBe(false);
+    expect(escapeDispatched).toBe(false);
+  });
+
+  it('fetchUsageLimit (Issue #49 ガードレール): バックグラウンドポーリング中にセッション画面が表示された場合、即座に中断してモーダルを勝手に閉じない', async () => {
+    let settingsClicked = false;
+    let closeClicked = false;
+    let escapeDispatched = false;
+
+    document.body.innerHTML = `
+      <main>
+        <button aria-label="設定" id="btn-settings">⚙️</button>
+        <textarea placeholder="メッセージを入力"></textarea>
+      </main>
+      <div id="modal-root"></div>
+    `;
+
+    document.getElementById('btn-settings').addEventListener('click', () => {
+      settingsClicked = true;
+      document.getElementById('modal-root').innerHTML = `
+        <div role="dialog">
+          <button aria-label="閉じる" id="btn-close-modal">×</button>
+          <div id="tab-panel">読み込み中...</div>
+        </div>
+      `;
+      document.getElementById('btn-close-modal').addEventListener('click', () => {
+        closeClicked = true;
+      });
+      // ポーリング途中の 40ms 後にユーザーがセッション画面を開いた（__MUSE_SESSION_VISIBLE__ = true）
+      setTimeout(() => {
+        window.__MUSE_SESSION_VISIBLE__ = true;
+      }, 40);
+    });
+
+    const onKeyDown = (e) => {
+      if (e.key === 'Escape') escapeDispatched = true;
+    };
+    document.addEventListener('keydown', onKeyDown);
+
+    await window.__MUSE_BRIDGE__.fetchUsageLimit(false, {
+      pollIntervalMs: 25,
+      maxTabWaitMs: 300,
+      maxLimitWaitMs: 300,
+    });
+
+    document.removeEventListener('keydown', onKeyDown);
+
+    expect(settingsClicked).toBe(true);
+    expect(closeClicked).toBe(false);
+    expect(escapeDispatched).toBe(false);
   });
 });

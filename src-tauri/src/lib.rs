@@ -387,6 +387,7 @@ fn ensure_session_window(app: &AppHandle) -> Result<WebviewWindow, String> {
                         if !s.is_visible().unwrap_or(false) || s.is_minimized().unwrap_or(false) {
                             return;
                         }
+                        let _ = s.eval("window.__MUSE_SESSION_VISIBLE__ = true;");
                     }
                     if let Some(main_win) = h.get_webview_window("main") {
                         let _ = main_win.emit("clear-unread", ());
@@ -1218,13 +1219,14 @@ async fn get_usage_limit(
     }
 
     let session = ensure_session_window(&app)?;
-    // §16 ガードレール①: session WebView が可視状態（フルUI表示中）のときは自動画面遷移を抑止
-    let is_session_visible = session.is_visible().unwrap_or(false);
+    // §16 ガードレール①: session WebView が可視状態（フルUI表示中）のとき、または非強制取得（定期ポーリング）時は自動画面遷移を抑止 (Issue #49)
+    let is_session_visible = session.is_visible().unwrap_or(false) && !session.is_minimized().unwrap_or(false);
+    let passive_only = is_session_visible || !force;
     let res = run_bridge_action(
         &session,
         "fetch_limit",
-        &serde_json::json!({ "passiveOnly": is_session_visible }),
-        12000,
+        &serde_json::json!({ "passiveOnly": passive_only }),
+        15000,
     )
     .await?;
 
@@ -1814,6 +1816,7 @@ async fn open_or_show_session(app: AppHandle) -> Result<SessionStatus, String> {
         let _ = main_win.hide();
     }
 
+    let _ = session.eval("window.__MUSE_SESSION_VISIBLE__ = true;");
     let _ = session.show();
     let _ = session.unminimize();
     let _ = session.set_focus();
@@ -1857,6 +1860,7 @@ async fn hide_session(app: AppHandle) -> Result<SessionStatus, String> {
             });
         }
 
+        let _ = session.eval("window.__MUSE_SESSION_VISIBLE__ = false;");
         let _ = session.hide();
 
         // セッション非表示時はマスコットモードを表示（位置をリセットせず既存位置で復元）

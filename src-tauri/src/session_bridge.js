@@ -9,6 +9,8 @@
 
 window.__MUSE_STORE__ = window.__MUSE_STORE__ || {};
 window.__MUSE_CACHED_LIMIT__ = window.__MUSE_CACHED_LIMIT__ || null;
+window.__MUSE_SESSION_VISIBLE__ = window.__MUSE_SESSION_VISIBLE__ || false;
+window.__MUSE_FETCHING_LIMIT__ = window.__MUSE_FETCHING_LIMIT__ || false;
 
 /**
  * §17.2 セレクタの多重化定義
@@ -44,12 +46,18 @@ const SELECTORS = {
   settingsButton: [
     'button[aria-label="設定"]',
     'button[aria-label*="設定"]',
+    'button[title*="設定"]',
     'a[aria-label="設定"]',
     'a[aria-label*="設定"]',
+    'a[title*="設定"]',
     'button[aria-label*="settings" i]',
+    'button[title*="settings" i]',
     'a[aria-label*="settings" i]',
+    'a[title*="settings" i]',
     'button.hatch-dock-reveal-item[aria-label*="設定"]',
-    '[data-testid*="settings"]'
+    '[role="button"][aria-label*="設定"]',
+    '[role="button"][aria-label*="settings" i]',
+    '[data-testid*="settings" i]'
   ],
   chatNavButton: [
     'button[aria-label="チャット"]',
@@ -104,12 +112,18 @@ function queryAllFirst(candidates, root = document) {
 function triggerReactClick(el) {
   if (!el) return;
   try { el.click(); } catch (_) {}
-  const opts = { bubbles: true, cancelable: true, view: window };
-  el.dispatchEvent(new PointerEvent('pointerdown', opts));
-  el.dispatchEvent(new MouseEvent('mousedown', opts));
-  el.dispatchEvent(new PointerEvent('pointerup', opts));
-  el.dispatchEvent(new MouseEvent('mouseup', opts));
-  el.dispatchEvent(new MouseEvent('click', opts));
+  const opts = { bubbles: true, cancelable: true };
+  try {
+    if (typeof PointerEvent === 'function') {
+      el.dispatchEvent(new PointerEvent('pointerdown', opts));
+    }
+    el.dispatchEvent(new MouseEvent('mousedown', opts));
+    if (typeof PointerEvent === 'function') {
+      el.dispatchEvent(new PointerEvent('pointerup', opts));
+    }
+    el.dispatchEvent(new MouseEvent('mouseup', opts));
+    el.dispatchEvent(new MouseEvent('click', opts));
+  } catch (_) {}
   const reactKey = Object.keys(el).find(k => k.startsWith('__reactProps$'));
   if (reactKey && typeof el[reactKey]?.onClick === 'function') {
     try {
@@ -124,30 +138,152 @@ function triggerReactClick(el) {
   }
 }
 
-// パッシブ監視: ユーザーまたはスクリプトが「設定 ＞ 一般」を開いた際に自動的に利用枠をキャッシュ
+function scanDomForLimit() {
+  let planName = '';
+  let usedPercent = null;
+  let remainingPercent = null;
+  let resetText = '';
+
+  const planEl = document.querySelector('span.text-body.text-text-primary, [class*="plan" i]');
+  if (planEl) {
+    const t = (planEl.textContent || '').trim();
+    if (t.includes('プラン') || t.includes('Plan') || t.includes('Free') || t.includes('無料') || t.includes('Pro')) {
+      planName = t;
+    }
+  }
+
+  // プログレスバー要素の属性（aria-valuenow や style="width: 50%" 等）からパーセントを検出
+  const progressBars = Array.from(document.querySelectorAll('[role="progressbar"], [class*="progress" i]'));
+  for (const bar of progressBars) {
+    let p = null;
+    const valNow = bar.getAttribute('aria-valuenow');
+    if (valNow !== null && !isNaN(parseInt(valNow, 10))) {
+      p = Math.max(0, Math.min(100, parseInt(valNow, 10)));
+    } else {
+      const wMatch = (bar.getAttribute('style') || '').match(/width\s*:\s*(\d+(?:\.\d+)?)\s*%/i);
+      if (wMatch) {
+        p = Math.round(parseFloat(wMatch[1]));
+      }
+    }
+
+    if (p !== null) {
+      const container = bar.closest('[role="dialog"], [class*="modal" i], div');
+      const parentTxt = (container?.innerText || container?.textContent || '').toLowerCase();
+      if (parentTxt.includes('残り') || parentTxt.includes('left') || parentTxt.includes('remaining')) {
+        remainingPercent = p;
+        usedPercent = 100 - p;
+      } else {
+        usedPercent = p;
+        remainingPercent = Math.max(0, 100 - p);
+      }
+      break;
+    }
+  }
+
+  // 結合テキスト（innerText または textContent）からの判定を最優先（React等で「56%」と「使用済み」が別ノードに分割されている場合に対応）
+  const allText = document.body ? (document.body.innerText || document.body.textContent || '') : '';
+  if (allText) {
+    if (usedPercent === null) {
+      const mUsed = allText.match(/(\d+(?:\.\d+)?)\s*%\s*(?:使用済み|使用|used|consumed)/i);
+      if (mUsed) {
+        usedPercent = Math.round(parseFloat(mUsed[1]));
+        if (remainingPercent === null) {
+          remainingPercent = Math.max(0, 100 - usedPercent);
+        }
+      }
+    }
+    if (remainingPercent === null) {
+      const mRem1 = allText.match(/(?:残り|残|remaining|left)\s*[:：]?\s*(\d+(?:\.\d+)?)\s*%/i);
+      const mRem2 = allText.match(/(\d+(?:\.\d+)?)\s*%\s*(?:残り|残|remaining|left)/i);
+      if (mRem1) {
+        remainingPercent = Math.round(parseFloat(mRem1[1]));
+        if (usedPercent === null) usedPercent = Math.max(0, 100 - remainingPercent);
+      } else if (mRem2) {
+        remainingPercent = Math.round(parseFloat(mRem2[1]));
+        if (usedPercent === null) usedPercent = Math.max(0, 100 - remainingPercent);
+      }
+    }
+    if (!resetText) {
+      const mReset = allText.match(/(\d+週間の上限は[^\n。]*リセットされます|\d+月\d+日にリセットされます|リセット\s*[:：]?\s*[^\n。]+)/);
+      if (mReset) {
+        resetText = mReset[1].trim();
+      }
+    }
+  }
+
+  // 補助: 個別テキストノード走査（TreeWalker）
+  if ((usedPercent === null || remainingPercent === null || !resetText) && document.body) {
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    let node;
+    while ((node = walker.nextNode())) {
+      const txt = (node.textContent || '').trim();
+      if (!txt) continue;
+      if (usedPercent === null) {
+        const matchUsed = txt.match(/(\d+(?:\.\d+)?)\s*%\s*(?:使用済み|使用|used|consumed)/i);
+        if (matchUsed) {
+          usedPercent = Math.round(parseFloat(matchUsed[1]));
+          if (remainingPercent === null) remainingPercent = Math.max(0, 100 - usedPercent);
+        }
+      }
+      if (remainingPercent === null) {
+        const matchRem1 = txt.match(/(?:残り|残|remaining|left)\s*[:：]?\s*(\d+(?:\.\d+)?)\s*%/i);
+        const matchRem2 = txt.match(/(\d+(?:\.\d+)?)\s*%\s*(?:残り|残|remaining|left)/i);
+        if (matchRem1) {
+          remainingPercent = Math.round(parseFloat(matchRem1[1]));
+          if (usedPercent === null) usedPercent = Math.max(0, 100 - remainingPercent);
+        } else if (matchRem2) {
+          remainingPercent = Math.round(parseFloat(matchRem2[1]));
+          if (usedPercent === null) usedPercent = Math.max(0, 100 - remainingPercent);
+        }
+      }
+      if (!resetText) {
+        const matchReset = txt.match(/(\d+週間の上限は[^\n。]*リセットされます|\d+月\d+日にリセットされます|リセット\s*[:：]?\s*[^\n。]+)/);
+        if (matchReset) resetText = matchReset[1].trim();
+      }
+    }
+  }
+
+  if (remainingPercent !== null || usedPercent !== null || planName || resetText) {
+    return {
+      plan_name: planName || '無料プラン',
+      used_percent: usedPercent,
+      remaining_percent: remainingPercent,
+      reset_text: resetText || ''
+    };
+  }
+  return null;
+}
+
+function findGeneralTab() {
+  // 1. 明示的なタブ・メニュー・ボタン要素でテキストが「一般」または「General」に一致するものを最優先
+  const interactiveCandidates = Array.from(
+    document.querySelectorAll('[role="tab"], [role="menuitem"], button, a, [role="button"]')
+  );
+  const exactInteractive = interactiveCandidates.find(t => {
+    const txt = (t.textContent || '').trim();
+    return txt === '一般' || /^general$/i.test(txt);
+  });
+  if (exactInteractive) return exactInteractive;
+
+  // 2. 子要素を持たないリーフ要素（親コンテナの誤クリック防止）でテキストが「一般」または「General」に一致するもの
+  const leafCandidates = Array.from(
+    document.querySelectorAll('button, a, [role="tab"], [role="menuitem"], [role="button"], div, span')
+  );
+  const exactLeaf = leafCandidates.find(t => {
+    if (t.children.length > 0) return false;
+    const txt = (t.textContent || '').trim();
+    return txt === '一般' || /^general$/i.test(txt) || (txt.length <= 10 && txt.includes('一般'));
+  });
+  return exactLeaf || null;
+}
+
+// パッシブ監視: ユーザーまたはスクリプトが「設定 ＞ 一般」を開いた際に自動的に利用枠をキャッシュ (Issue #49)
 if (!window.__MUSE_PASSIVE_WATCHER__) {
   window.__MUSE_PASSIVE_WATCHER__ = setInterval(() => {
     try {
-      const bodyText = document.body ? (document.body.innerText || document.body.textContent || '') : '';
-      const matchUsed = bodyText.match(/(\d+)\s*%\s*(?:使用済み|used|consumed)/i);
-      if (matchUsed) {
-        const usedPercent = parseInt(matchUsed[1], 10);
-        const remainingPercent = Math.max(0, 100 - usedPercent);
-        const matchReset = bodyText.match(/(\d+週間の上限は[^\n。]*リセットされます|\d+月\d+日にリセットされます|リセット\s*[:：]?\s*[^\n。]+)/);
-        const planEl = document.querySelector('span.text-body.text-text-primary, [class*="plan" i]');
-        let planName = '無料プラン';
-        if (planEl) {
-          const t = (planEl.textContent || '').trim();
-          if (t.includes('プラン') || t.includes('Plan') || t.includes('Free') || t.includes('無料')) {
-            planName = t;
-          }
-        }
-        window.__MUSE_CACHED_LIMIT__ = {
-          plan_name: planName,
-          used_percent: usedPercent,
-          remaining_percent: remainingPercent,
-          reset_text: matchReset ? matchReset[1].trim() : ''
-        };
+      const detected = scanDomForLimit();
+      if (detected && (detected.used_percent !== null || detected.remaining_percent !== null)) {
+        window.__MUSE_CACHED_LIMIT__ = detected;
       }
     } catch (_) {}
   }, 1000);
@@ -742,119 +878,23 @@ window.__MUSE_BRIDGE__ = {
   },
 
   /**
-   * 4. ウィンドウリミット（利用枠）の取得 (R5, §16 ガードレール対応)
+   * 4. ウィンドウリミット（利用枠）の取得 (R5, §16 ガードレール対応, Issue #49 ポーリング待機強化)
    * @param {boolean} passiveOnly true の場合は画面遷移（設定クリック）を一切行わない（ガードレール①）
+   * @param {object} options ポーリング間隔・最大待機時間のオプション（テスト・調整用）
    */
-  async fetchUsageLimit(passiveOnly = false) {
-    const scanDomForLimit = () => {
-      let planName = '';
-      let usedPercent = null;
-      let remainingPercent = null;
-      let resetText = '';
+  scanDomForLimit,
 
-      const planEl = document.querySelector('span.text-body.text-text-primary, [class*="plan" i]');
-      if (planEl) {
-        const t = (planEl.textContent || '').trim();
-        if (t.includes('プラン') || t.includes('Plan') || t.includes('Free') || t.includes('無料')) {
-          planName = t;
-        }
+  async fetchUsageLimit(passiveOnly = false, options = {}) {
+    const isSessionVisible = () => {
+      if (window.__MUSE_SESSION_VISIBLE__ === true) return true;
+      if (options?.respectDocumentFocus && typeof document.hasFocus === 'function' && document.hasFocus()) {
+        return true;
       }
+      return false;
+    };
 
-      // プログレスバー要素の属性（aria-valuenow や style="width: 50%" 等）からパーセントを検出
-      const progressBars = Array.from(document.querySelectorAll('[role="progressbar"], [class*="progress" i]'));
-      for (const bar of progressBars) {
-        let p = null;
-        const valNow = bar.getAttribute('aria-valuenow');
-        if (valNow !== null && !isNaN(parseInt(valNow, 10))) {
-          p = Math.max(0, Math.min(100, parseInt(valNow, 10)));
-        } else {
-          const wMatch = (bar.getAttribute('style') || '').match(/width\s*:\s*(\d+(?:\.\d+)?)\s*%/i);
-          if (wMatch) {
-            p = Math.round(parseFloat(wMatch[1]));
-          }
-        }
-
-        if (p !== null) {
-          const parentTxt = (bar.closest('[role="dialog"], [class*="modal" i], div')?.innerText || '').toLowerCase();
-          if (parentTxt.includes('残り') || parentTxt.includes('left') || parentTxt.includes('remaining')) {
-            remainingPercent = p;
-            usedPercent = 100 - p;
-          } else {
-            usedPercent = p;
-            remainingPercent = Math.max(0, 100 - p);
-          }
-          break;
-        }
-      }
-
-      // 結合テキスト（innerText）からの判定を最優先（React等で「56%」と「使用済み」が別ノードに分割されている場合に対応）
-      const allText = document.body ? (document.body.innerText || '') : '';
-      if (allText) {
-        if (usedPercent === null) {
-          const mUsed = allText.match(/(\d+)\s*%\s*(?:使用済み|used|consumed)/i);
-          if (mUsed) {
-            usedPercent = parseInt(mUsed[1], 10);
-            if (remainingPercent === null) {
-              remainingPercent = Math.max(0, 100 - usedPercent);
-            }
-          }
-        }
-        if (remainingPercent === null) {
-          const mRem1 = allText.match(/(?:残り|残|remaining|left)\s*[:：]?\s*(\d+)\s*%/i);
-          const mRem2 = allText.match(/(\d+)\s*%\s*(?:残り|残|remaining|left)/i);
-          if (mRem1) {
-            remainingPercent = parseInt(mRem1[1], 10);
-            if (usedPercent === null) usedPercent = Math.max(0, 100 - remainingPercent);
-          } else if (mRem2) {
-            remainingPercent = parseInt(mRem2[1], 10);
-            if (usedPercent === null) usedPercent = Math.max(0, 100 - remainingPercent);
-          }
-        }
-        if (!resetText) {
-          const mReset = allText.match(/(\d+週間の上限は[^\n。]*リセットされます|\d+月\d+日にリセットされます|リセット\s*[:：]?\s*[^\n。]+)/);
-          if (mReset) {
-            resetText = mReset[1].trim();
-          }
-        }
-      }
-
-      // 補助: 個別テキストノード走査（TreeWalker）
-      if (usedPercent === null || remainingPercent === null || !resetText) {
-        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-        let node;
-        while ((node = walker.nextNode())) {
-          const txt = (node.textContent || '').trim();
-          if (!txt) continue;
-          if (usedPercent === null) {
-            const matchUsed = txt.match(/(\d+)\s*%\s*(?:使用済み|used|consumed)/i);
-            if (matchUsed) {
-              usedPercent = parseInt(matchUsed[1], 10);
-              if (remainingPercent === null) remainingPercent = Math.max(0, 100 - usedPercent);
-            }
-          }
-          if (remainingPercent === null) {
-            const matchRem = txt.match(/(?:残り|残|remaining|left)\s*[:：]?\s*(\d+)\s*%/i);
-            if (matchRem) {
-              remainingPercent = parseInt(matchRem[1], 10);
-              if (usedPercent === null) usedPercent = Math.max(0, 100 - remainingPercent);
-            }
-          }
-          if (!resetText) {
-            const matchReset = txt.match(/(\d+週間の上限は[^\n。]*リセットされます|\d+月\d+日にリセットされます)/);
-            if (matchReset) resetText = matchReset[1].trim();
-          }
-        }
-      }
-
-      if (remainingPercent !== null || usedPercent !== null || planName || resetText) {
-        return {
-          plan_name: planName || '無料プラン',
-          used_percent: usedPercent,
-          remaining_percent: remainingPercent,
-          reset_text: resetText || ''
-        };
-      }
-      return null;
+    const isDialogOpen = () => {
+      return !!document.querySelector('[role="dialog"]') || !!queryFirst(SELECTORS.modalCloseButton).el;
     };
 
     // 1. まず現在の画面でスキャン
@@ -864,66 +904,129 @@ window.__MUSE_BRIDGE__ = {
       return immediate;
     }
 
-    // ガードレール①: session WebView が可視中、またはAIが回答生成中の場合は自動遷移・Escape送信を抑止 (Issue #34)
-    const isGenerating = !!document.querySelector('button[aria-label*="停止" i], button[aria-label*="stop" i], button[title*="停止" i], button[title*="stop" i]');
-    if (passiveOnly || isGenerating) {
-      return window.__MUSE_CACHED_LIMIT__ || immediate || {
-        plan_name: '無料プラン',
-        used_percent: null,
-        remaining_percent: null,
-        reset_text: 'セッション画面の[設定>一般]で自動取得'
-      };
-    }
-
-    // 2. 非表示時は「設定 ＞ 一般」を開いて確認し、ガードレール③に従いメインチャットへ明示的に戻す
-    const { el: settingsBtn } = queryFirst(SELECTORS.settingsButton);
-    if (settingsBtn) {
-      triggerReactClick(settingsBtn);
-      await new Promise(r => setTimeout(r, 500));
-
-      const tabs = Array.from(document.querySelectorAll('button, a, [role="button"], [role="menuitem"], div, span'));
-      const generalTab = tabs.find(t => (t.textContent || '').trim() === '一般' || (t.children.length === 0 && (t.textContent || '').includes('一般')));
-      if (generalTab) {
-        triggerReactClick(generalTab);
-        await new Promise(r => setTimeout(r, 550));
-      }
-
-      const afterClick = scanDomForLimit();
-
-      // §16 ガードレール③: Escape 任せにせず、閉じるボタン＋Escape＋チャットナビゲーションで明示的にメインチャットへ戻す
-      const { el: closeBtn } = queryFirst(SELECTORS.modalCloseButton);
-      if (closeBtn) {
-        triggerReactClick(closeBtn);
-      }
-      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true }));
-      await new Promise(r => setTimeout(r, 250));
-
-      // もしメインチャットの入力欄が見えていなければ、左ドックの「チャット」ボタンを明示的にクリック
-      const { el: inputAfter } = queryFirst(SELECTORS.chatInput);
-      if (!inputAfter) {
-        const { el: chatNav } = queryFirst(SELECTORS.chatNavButton);
-        if (chatNav) {
-          triggerReactClick(chatNav);
-          await new Promise(r => setTimeout(r, 300));
-        }
-      }
-
-      if (afterClick && (afterClick.used_percent !== null || afterClick.remaining_percent !== null)) {
-        window.__MUSE_CACHED_LIMIT__ = afterClick;
-        return afterClick;
-      }
-    }
-
-    if (window.__MUSE_CACHED_LIMIT__) {
-      return window.__MUSE_CACHED_LIMIT__;
-    }
-
-    return immediate || {
+    const fallbackResult = () => window.__MUSE_CACHED_LIMIT__ || immediate || {
       plan_name: '無料プラン',
       used_percent: null,
       remaining_percent: null,
       reset_text: 'セッション画面の[設定>一般]で自動取得'
     };
+
+    const pollIntervalMs = Math.max(10, Number(options?.pollIntervalMs) || 100);
+    const maxTabWaitMs = Math.max(pollIntervalMs, Number(options?.maxTabWaitMs) || 1000);
+    const maxLimitWaitMs = Math.max(pollIntervalMs, Number(options?.maxLimitWaitMs) || 3000);
+    const closeWaitMs = Math.max(10, Number(options?.closeWaitMs) || 200);
+    const navWaitMs = Math.max(10, Number(options?.navWaitMs) || 250);
+
+    // ガードレール: 開始時点で既にダイアログが開いている場合はユーザーが操作中のため、絶対に閉じず値のみ読み取る (Issue #49)
+    if (isDialogOpen()) {
+      if (!passiveOnly) {
+        const passiveSteps = Math.ceil(maxTabWaitMs / pollIntervalMs);
+        for (let i = 0; i < passiveSteps; i++) {
+          await new Promise(r => setTimeout(r, pollIntervalMs));
+          const scanned = scanDomForLimit();
+          if (scanned && (scanned.used_percent !== null || scanned.remaining_percent !== null)) {
+            window.__MUSE_CACHED_LIMIT__ = scanned;
+            return scanned;
+          }
+        }
+      }
+      return fallbackResult();
+    }
+
+    // ガードレール①: session WebView が可視中、AIが回答生成中、または別リクエスト実行中の場合は自動遷移・Escape送信を抑止 (Issue #34, #49)
+    const isGenerating = !!document.querySelector('button[aria-label*="停止" i], button[aria-label*="stop" i], button[title*="停止" i], button[title*="stop" i]');
+    if (passiveOnly || isGenerating || isSessionVisible() || window.__MUSE_FETCHING_LIMIT__) {
+      return fallbackResult();
+    }
+
+    window.__MUSE_FETCHING_LIMIT__ = true;
+    try {
+      // 2. 非表示時は「設定 ＞ 一般」を開いて確認し、ガードレール③に従いメインチャットへ明示的に戻す
+      const { el: settingsBtn } = queryFirst(SELECTORS.settingsButton);
+      if (settingsBtn) {
+        triggerReactClick(settingsBtn);
+
+        // 設定クリック後、「一般」タブまたは利用枠の描画完了まで最大 maxTabWaitMs ポーリング待機 (Issue #49)
+        let afterClick = null;
+        let generalTab = null;
+        const tabMaxSteps = Math.ceil(maxTabWaitMs / pollIntervalMs);
+        for (let i = 0; i < tabMaxSteps; i++) {
+          await new Promise(r => setTimeout(r, pollIntervalMs));
+          // ポーリング中にユーザーがセッション画面を表示した場合は即座に中断し、勝手に閉じない
+          if (isSessionVisible()) {
+            return afterClick || fallbackResult();
+          }
+          afterClick = scanDomForLimit();
+          if (afterClick && (afterClick.used_percent !== null || afterClick.remaining_percent !== null)) {
+            break;
+          }
+          generalTab = findGeneralTab();
+          if (generalTab) {
+            triggerReactClick(generalTab);
+            break;
+          }
+        }
+
+        // まだ利用枠が取得できていない場合、非同期API通信・DOM描画完了まで最大 maxLimitWaitMs ポーリング待機 (Issue #49)
+        if (!afterClick || (afterClick.used_percent === null && afterClick.remaining_percent === null)) {
+          const limitMaxSteps = Math.ceil(maxLimitWaitMs / pollIntervalMs);
+          for (let i = 0; i < limitMaxSteps; i++) {
+            await new Promise(r => setTimeout(r, pollIntervalMs));
+            if (isSessionVisible()) {
+              return afterClick || fallbackResult();
+            }
+            afterClick = scanDomForLimit();
+            if (afterClick && (afterClick.used_percent !== null || afterClick.remaining_percent !== null)) {
+              break;
+            }
+            if (!generalTab) {
+              generalTab = findGeneralTab();
+              if (generalTab) {
+                triggerReactClick(generalTab);
+              }
+            }
+          }
+        }
+
+        // クローズ処理直前にもセッション可視状態を再確認（ユーザーが開いた画面を絶対に閉じない）
+        if (isSessionVisible()) {
+          if (afterClick && (afterClick.used_percent !== null || afterClick.remaining_percent !== null)) {
+            window.__MUSE_CACHED_LIMIT__ = afterClick;
+            return afterClick;
+          }
+          return fallbackResult();
+        }
+
+        // §16 ガードレール③: Escape 任せにせず、閉じるボタン＋Escape＋チャットナビゲーションで明示的にメインチャットへ戻す
+        const { el: closeBtn } = queryFirst(SELECTORS.modalCloseButton);
+        if (closeBtn) {
+          triggerReactClick(closeBtn);
+        }
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true }));
+        await new Promise(r => setTimeout(r, closeWaitMs));
+
+        // もしメインチャットの入力欄が見えていなければ、左ドックの「チャット」ボタンを明示的にクリック
+        if (!isSessionVisible()) {
+          const { el: inputAfter } = queryFirst(SELECTORS.chatInput);
+          if (!inputAfter) {
+            const { el: chatNav } = queryFirst(SELECTORS.chatNavButton);
+            if (chatNav) {
+              triggerReactClick(chatNav);
+              await new Promise(r => setTimeout(r, navWaitMs));
+            }
+          }
+        }
+
+        if (afterClick && (afterClick.used_percent !== null || afterClick.remaining_percent !== null)) {
+          window.__MUSE_CACHED_LIMIT__ = afterClick;
+          return afterClick;
+        }
+      }
+
+      return fallbackResult();
+    } finally {
+      window.__MUSE_FETCHING_LIMIT__ = false;
+    }
   },
 
   /**
@@ -986,7 +1089,7 @@ window.__MUSE_BRIDGE__ = {
           result = await this.sendMessage(args?.text);
           break;
         case 'fetch_limit':
-          result = await this.fetchUsageLimit(!!args?.passiveOnly);
+          result = await this.fetchUsageLimit(!!args?.passiveOnly, args?.options);
           break;
         default:
           throw new Error(`Unknown action: ${action}`);

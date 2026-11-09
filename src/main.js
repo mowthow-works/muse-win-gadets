@@ -610,9 +610,11 @@ function commitPendingAssistantMessage() {
   recordInteraction();
   // Issue #36: 回答完了時の歓喜ポーズを廃止し、直接通常の待機状態(idle)へ戻す
   setAvatarState('idle', { force: true });
-  // 会話返答完了に伴い、最新の利用枠を自動再取得 (Issue #33)
+  // 会話返答完了に伴い、セッション非表示時のみ最新の利用枠を自動再取得 (Issue #33, #49)
   setTimeout(() => {
-    loadUsageLimit(true);
+    if (!isSessionVisible) {
+      loadUsageLimit(true);
+    }
   }, 2000);
   // ただしセッション画面表示中はカタカタ音・吹き出し再生を抑止 (Issue #29)
   if (document.body.classList.contains('mode-mascot') && !isSessionVisible) {
@@ -1851,7 +1853,7 @@ async function toggleSessionWindow() {
     if (isSessionVisible) {
       await invoke('hide_session');
       isSessionVisible = false;
-    setTimeout(() => loadUsageLimit(false), 300);
+      setTimeout(() => loadUsageLimit(true), 300);
     } else {
       if (liveQuotesPrevChatUrl) {
         isWakingForLiveQuotes = false;
@@ -2310,17 +2312,25 @@ window.addEventListener('DOMContentLoaded', async () => {
 
   // セッションWebViewのロード完了に合わせて段階的にチャット、ヘルスチェック、利用枠を同期
   setTimeout(() => syncAllSequential(false), 1800);
-  setTimeout(() => {
-    syncAllSequential(false);
-    loadUsageLimit(true);
+  setTimeout(async () => {
+    await syncAllSequential(false);
+    if (!isSessionVisible) {
+      loadUsageLimit(true);
+    }
   }, 4500);
-  setTimeout(() => {
-    syncAllSequential(false);
-    loadUsageLimit(true);
+  setTimeout(async () => {
+    await syncAllSequential(false);
+    const curBadge = avatarLimitBadgeEl ? avatarLimitBadgeEl.textContent.trim() : '';
+    if (!isSessionVisible && (!curBadge || curBadge === '--%')) {
+      loadUsageLimit(true);
+    }
   }, 9000);
-  setTimeout(() => {
-    syncAllSequential(false);
-    loadUsageLimit(true);
+  setTimeout(async () => {
+    await syncAllSequential(false);
+    const curBadge = avatarLimitBadgeEl ? avatarLimitBadgeEl.textContent.trim() : '';
+    if (!isSessionVisible && (!curBadge || curBadge === '--%')) {
+      loadUsageLimit(true);
+    }
   }, 16000);
 
   // 3秒ごとのリアルタイム動作状態・チャット同期 ＆ 設定ホットリロード・放置監視
@@ -2342,11 +2352,11 @@ window.addEventListener('DOMContentLoaded', async () => {
     await loadChatMessages();
   }, 12000);
 
-  // §16 10 分ごとの利用枠定期自動取得（ガードレール①: セッション画面が非表示のときのみ実行）
+  // §16 5 分ごとの利用枠定期自動取得（ガードレール①: セッション画面が非表示のときのみ実行, Issue #49）
   setInterval(async () => {
     await updateSessionStatus();
     if (!isSessionVisible) {
       await loadUsageLimit(true);
     }
-  }, 600000);
+  }, 300000);
 });
