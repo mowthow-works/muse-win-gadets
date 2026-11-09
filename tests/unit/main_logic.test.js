@@ -197,4 +197,40 @@ describe('main.js UI Logic & Regression Suite', () => {
     expect(saveCall[1].payload.items[0].text).toBe('今日もいい調子だね！');
     expect(saveCall[1].payload.items[1].text).toBe('コーヒーでも飲む？');
   });
+
+  it('長文タイピング表示時に親コンテナ (.mascot-bubble-body) の scrollTop が scrollHeight に自動追従する (Issue #50)', async () => {
+    // 初回同期（ベースライン記録）を完了させる
+    await vi.advanceTimersByTimeAsync(2000);
+
+    const mascotBubbleText = document.getElementById('mascot-bubble-text');
+    const bubbleBody = mascotBubbleText.parentElement;
+    expect(bubbleBody.classList.contains('mascot-bubble-body')).toBe(true);
+
+    // 文字数に応じて scrollHeight が増加するレイアウト挙動をシミュレート
+    Object.defineProperty(bubbleBody, 'scrollHeight', {
+      get: () => (mascotBubbleText.textContent || '').length * 8,
+      configurable: true,
+    });
+
+    const longText = '1行目のテキストです。\n2行目のテキストです。\n3行目のテキストです。\n4行目のテキストです。\n5行目のテキストです。';
+    invokeMock.mockImplementation(async (cmd) => {
+      if (cmd === 'get_chat_messages') {
+        return [{ role: 'assistant', text: longText }];
+      }
+      if (cmd === 'get_session_status') return { exists: true, visible: false };
+      if (cmd === 'get_avatar_state') return { state: 'idle', statusText: 'リンク済み' };
+      return {};
+    });
+
+    // 3秒の定期ポーリングを発火させてタイピング開始
+    await vi.advanceTimersByTimeAsync(3100);
+    expect(mascotBubbleText.textContent.length).toBeGreaterThan(0);
+    expect(bubbleBody.scrollTop).toBe(bubbleBody.scrollHeight);
+
+    // タイピング完了まで時間を進める
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(mascotBubbleText.textContent).toBe(longText);
+    expect(bubbleBody.scrollTop).toBe(longText.length * 8);
+    expect(bubbleBody.scrollTop).toBeGreaterThan(200);
+  });
 });

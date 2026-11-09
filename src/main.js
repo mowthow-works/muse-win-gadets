@@ -330,9 +330,17 @@ function renderMascotOptions(options) {
   mascotBubbleOptions.appendChild(footer);
 
   mascotBubbleOptions.classList.remove('hidden');
-  if (mascotBubbleText && mascotBubbleText.parentElement) {
-    mascotBubbleText.parentElement.scrollTop = mascotBubbleText.parentElement.scrollHeight;
+  scrollMascotBubbleToBottom();
+}
+
+// 吹き出しスクロールコンテナ（.mascot-bubble-body）の最下部自動追従 (Issue #50)
+function scrollMascotBubbleToBottom() {
+  if (!mascotBubbleText) return;
+  const scrollContainer = mascotBubbleText.parentElement;
+  if (scrollContainer) {
+    scrollContainer.scrollTop = scrollContainer.scrollHeight;
   }
+  mascotBubbleText.scrollTop = mascotBubbleText.scrollHeight;
 }
 
 // 選択肢クリック時のワンクリック返信 (Issue #32)
@@ -374,7 +382,7 @@ function startTypingLoop(text) {
       const char = currentTypingTargetText[currentTypingIdx];
       mascotBubbleText.textContent += char;
       currentTypingIdx++;
-      mascotBubbleText.scrollTop = mascotBubbleText.scrollHeight;
+      scrollMascotBubbleToBottom();
       // 空白・改行以外でカタカタタイピング音を再生
       if (char !== ' ' && char !== '\n' && char !== '\r' && char !== '\t' && char !== '　') {
         playTypingSound();
@@ -454,6 +462,9 @@ function playLupinTyping(text, options = []) {
   currentTypingIdx = 0;
   currentTypingOptions = Array.isArray(options) ? options : [];
   mascotBubbleText.textContent = '';
+  if (mascotBubbleText.parentElement) {
+    mascotBubbleText.parentElement.scrollTop = 0;
+  }
   if (mascotBubbleOptions) {
     mascotBubbleOptions.innerHTML = '';
     mascotBubbleOptions.classList.add('hidden');

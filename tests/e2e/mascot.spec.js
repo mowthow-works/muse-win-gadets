@@ -248,4 +248,41 @@ test.describe('Muse Desktop Mascot - Real Browser UI & Layout Regression Suite',
       'https://muse.ai/chat/dedicated-room-123'
     );
   });
+
+  test('Issue #50: 長文メッセージのタイピング表示時に .mascot-bubble-body のスクロールが最下部へ自動追従すること', async ({ page }) => {
+    await page.goto('/index.html');
+
+    const longMessage = Array.from({ length: 12 }, (_, i) => `${i + 1}行目: 長文スクロール自動追従の検証メッセージです。`).join('\n');
+
+    await page.evaluate(async (msg) => {
+      await loadChatMessages();
+      window.__MOCK_MESSAGES__ = [
+        { role: 'assistant', text: 'こんにちは！何かお手伝いしましょうか？' },
+        { role: 'assistant', text: msg },
+      ];
+      await loadChatMessages();
+    }, longMessage);
+
+    const bubble = page.locator('#mascot-bubble');
+    await expect(bubble).toBeVisible();
+
+    // タイピングが完了して末尾の「12行目」が表示されるまで待機
+    await expect(page.locator('#mascot-bubble-text')).toContainText('12行目:', { timeout: 5000 });
+
+    const scrollMetrics = await page.evaluate(() => {
+      const body = document.querySelector('.mascot-bubble-body');
+      return {
+        scrollTop: body.scrollTop,
+        scrollHeight: body.scrollHeight,
+        clientHeight: body.clientHeight,
+      };
+    });
+
+    expect(scrollMetrics.scrollHeight).toBeGreaterThan(scrollMetrics.clientHeight);
+    expect(scrollMetrics.scrollTop).toBeGreaterThan(0);
+    // 最下部付近までスクロール追従していること
+    expect(scrollMetrics.scrollTop + scrollMetrics.clientHeight).toBeGreaterThanOrEqual(
+      scrollMetrics.scrollHeight - 5
+    );
+  });
 });
