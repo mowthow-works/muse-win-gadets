@@ -328,6 +328,37 @@ where
     cfg
 }
 
+fn is_session_allowed_host(host: &str) -> bool {
+    let h = host.to_ascii_lowercase();
+    h == "muse.ai"
+        || h.ends_with(".muse.ai")
+        || h == "accounts.google.com"
+        || h == "appleid.apple.com"
+        || h == "login.microsoftonline.com"
+        || h == "login.live.com"
+}
+
+fn should_open_session_url_externally(url: &tauri::Url) -> bool {
+    match url.scheme() {
+        "http" | "https" => match url.host_str() {
+            Some(host) => !is_session_allowed_host(host),
+            None => false,
+        },
+        "mailto" | "tel" => true,
+        _ => false,
+    }
+}
+
+fn spawn_open_external_url(app: &AppHandle, event_name: &str, url_str: &str) {
+    let h = app.clone();
+    let ev = event_name.to_string();
+    let u = url_str.to_string();
+    tauri::async_runtime::spawn(async move {
+        let res = h.opener().open_url(&u, None::<&str>);
+        append_recovery_log(&h, &ev, &format!("url={}, open_res={:?}", u, res));
+    });
+}
+
 fn ensure_session_window(app: &AppHandle) -> Result<WebviewWindow, String> {
     if let Some(win) = app.get_webview_window("session") {
         return Ok(win);
@@ -340,11 +371,48 @@ fn ensure_session_window(app: &AppHandle) -> Result<WebviewWindow, String> {
     let config = load_config_internal(app);
     let (init_w, init_h) = config.session_size.unwrap_or((1024.0, 768.0));
 
+    let app_for_nav = app.clone();
+    let app_for_new_window = app.clone();
+    let app_for_title = app.clone();
+
     let mut builder = WebviewWindowBuilder::new(app, "session", WebviewUrl::External(url))
         .title("Muse AI - Session")
         .inner_size(init_w, init_h)
         .visible(false)
-        .on_document_title_changed(|_win, title| {
+        // WebView2 標準の HTML5 ドラッグ＆ドロップ（チャット入力欄への画像ドロップ等）を有効化するため
+        // Tauri 側のネイティブ D&D フックを無効化する
+        .disable_drag_drop_handler()
+        .on_navigation(move |url| {
+            if should_open_session_url_externally(&url) {
+                spawn_open_external_url(&app_for_nav, "session_on_navigation", url.as_str());
+                return false;
+            }
+            true
+        })
+        .on_new_window(move |url, _features| {
+            if should_open_session_url_externally(&url) {
+                spawn_open_external_url(
+                    &app_for_new_window,
+                    "session_on_new_window",
+                    url.as_str(),
+                );
+                return tauri::webview::NewWindowResponse::Deny;
+            }
+            tauri::webview::NewWindowResponse::Allow
+        })
+        .on_document_title_changed(move |_win, title| {
+            if let Some(raw_url) = title.strip_prefix("__MUSE_OPEN_URL__:") {
+                if let Ok(parsed) = tauri::Url::parse(raw_url) {
+                    if should_open_session_url_externally(&parsed) {
+                        spawn_open_external_url(
+                            &app_for_title,
+                            "session_title_open_url",
+                            parsed.as_str(),
+                        );
+                    }
+                }
+                return;
+            }
             if let Ok(mut t) = doc_title_store().lock() {
                 *t = title;
             }
@@ -2854,5 +2922,26 @@ mod tests {
         assert!(rotated_body.len() < 1024);
 
         let _ = fs::remove_dir_all(&tmp_base);
+    }
+
+    #[test]
+    fn test_session_external_url_detection() {
+        let muse_root = tauri::Url::parse("https://muse.ai/?__pwa=1").unwrap();
+        let muse_sub = tauri::Url::parse("https://app.muse.ai/thread/123").unwrap();
+        let google_auth = tauri::Url::parse("https://accounts.google.com/o/oauth2/v2/auth").unwrap();
+        let apple_auth = tauri::Url::parse("https://appleid.apple.com/auth/authorize").unwrap();
+        let external_site = tauri::Url::parse("https://github.com/mowthow-works/muse-win-gadets").unwrap();
+        let google_search = tauri::Url::parse("https://www.google.com/search?q=muse").unwrap();
+        let mailto_url = tauri::Url::parse("mailto:support@example.com").unwrap();
+        let about_blank = tauri::Url::parse("about:blank").unwrap();
+
+        assert!(!should_open_session_url_externally(&muse_root));
+        assert!(!should_open_session_url_externally(&muse_sub));
+        assert!(!should_open_session_url_externally(&google_auth));
+        assert!(!should_open_session_url_externally(&apple_auth));
+        assert!(should_open_session_url_externally(&external_site));
+        assert!(should_open_session_url_externally(&google_search));
+        assert!(should_open_session_url_externally(&mailto_url));
+        assert!(!should_open_session_url_externally(&about_blank));
     }
 }

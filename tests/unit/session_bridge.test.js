@@ -399,4 +399,40 @@ describe('session_bridge.js DOM Scraping & Guardrails Suite', () => {
     expect(safety.isGenerating).toBe(true);
     expect(safety.hasDraft).toBe(false);
   });
+
+  it('外部リンククリックおよび window.open を検知して __MUSE_OPEN_URL__ タイトル通知を発行する (Issue #54)', () => {
+    document.title = 'Muse AI - Session';
+    document.body.innerHTML = `
+      <main>
+        <a id="ext-link" href="https://example.com/docs" target="_blank"><span>外部リンク</span></a>
+        <a id="int-link" href="https://muse.ai/thread/abc">内部リンク</a>
+        <a id="oauth-link" href="https://accounts.google.com/o/oauth2/auth">Googleログイン</a>
+      </main>
+    `;
+
+    // 内部リンクはフックしない
+    const intEvent = new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 });
+    document.getElementById('int-link').dispatchEvent(intEvent);
+    expect(intEvent.defaultPrevented).toBe(false);
+    expect(document.title).toBe('Muse AI - Session');
+
+    // OAuthリンクもフックしない
+    const oauthEvent = new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 });
+    document.getElementById('oauth-link').dispatchEvent(oauthEvent);
+    expect(oauthEvent.defaultPrevented).toBe(false);
+    expect(document.title).toBe('Muse AI - Session');
+
+    // 外部リンク（子要素 <span> クリック）はフックして __MUSE_OPEN_URL__ を設定する
+    const extSpan = document.querySelector('#ext-link span');
+    const extEvent = new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 });
+    extSpan.dispatchEvent(extEvent);
+    expect(extEvent.defaultPrevented).toBe(true);
+    expect(document.title).toBe('__MUSE_OPEN_URL__:https://example.com/docs');
+
+    // window.open でも外部URLなら __MUSE_OPEN_URL__ を設定して null を返す
+    document.title = 'Muse AI - Session';
+    const opened = window.open('https://github.com/mowthow-works', '_blank');
+    expect(opened).toBeNull();
+    expect(document.title).toBe('__MUSE_OPEN_URL__:https://github.com/mowthow-works');
+  });
 });

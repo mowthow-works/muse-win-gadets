@@ -1167,3 +1167,91 @@ window.__MUSE_BRIDGE__ = {
     }
   }
 };
+
+function isSessionAllowedHost(hostname) {
+  const h = String(hostname || '').toLowerCase();
+  return (
+    h === 'muse.ai' ||
+    h.endsWith('.muse.ai') ||
+    h === 'accounts.google.com' ||
+    h === 'appleid.apple.com' ||
+    h === 'login.microsoftonline.com' ||
+    h === 'login.live.com'
+  );
+}
+
+function shouldOpenExternally(rawHref, baseHref) {
+  if (!rawHref || typeof rawHref !== 'string') return null;
+  const trimmed = rawHref.trim();
+  if (!trimmed || trimmed.startsWith('#')) return null;
+  let parsed;
+  try {
+    parsed = new URL(trimmed, baseHref || (typeof window !== 'undefined' && window.location ? window.location.href : 'https://muse.ai/'));
+  } catch (_) {
+    return null;
+  }
+  const protocol = (parsed.protocol || '').toLowerCase();
+  if (protocol === 'mailto:' || protocol === 'tel:') {
+    return parsed.href;
+  }
+  if (protocol === 'http:' || protocol === 'https:') {
+    if (!isSessionAllowedHost(parsed.hostname)) {
+      return parsed.href;
+    }
+  }
+  return null;
+}
+
+function notifyOpenExternalUrl(url) {
+  if (!url || typeof document === 'undefined') return;
+  const prevTitle = document.title && !document.title.startsWith('__MUSE_')
+    ? document.title
+    : 'Muse AI - Session';
+  document.title = `__MUSE_OPEN_URL__:${url}`;
+  setTimeout(() => {
+    if (document.title.startsWith('__MUSE_OPEN_URL__:')) {
+      document.title = prevTitle;
+    }
+  }, 100);
+}
+
+function installExternalLinkInterceptor() {
+  if (typeof window === 'undefined' || typeof document === 'undefined') return;
+  if (window.__MUSE_EXTERNAL_LINK_HOOKED__) return;
+  window.__MUSE_EXTERNAL_LINK_HOOKED__ = true;
+
+  document.addEventListener(
+    'click',
+    (e) => {
+      if (!e || e.defaultPrevented) return;
+      if (typeof e.button === 'number' && e.button !== 0 && e.button !== 1) return;
+      const target = e.target;
+      const anchor = target && typeof target.closest === 'function' ? target.closest('a[href]') : null;
+      if (!anchor) return;
+      const rawHref = anchor.getAttribute('href');
+      const extUrl = shouldOpenExternally(rawHref);
+      if (!extUrl) return;
+      e.preventDefault();
+      e.stopPropagation();
+      notifyOpenExternalUrl(extUrl);
+    },
+    true
+  );
+
+  if (typeof window.open === 'function') {
+    const origOpen = window.open.bind(window);
+    window.open = function (url, target, features) {
+      if (typeof url === 'string' && url.length > 0) {
+        const extUrl = shouldOpenExternally(url);
+        if (extUrl) {
+          notifyOpenExternalUrl(extUrl);
+          return null;
+        }
+      }
+      return origOpen(url, target, features);
+    };
+  }
+}
+
+installExternalLinkInterceptor();
+
