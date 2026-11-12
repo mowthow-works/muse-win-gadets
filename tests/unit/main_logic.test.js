@@ -547,4 +547,49 @@ describe('main.js UI Logic & Regression Suite', () => {
     expect(invokeMock).toHaveBeenCalledWith('get_usage_limit', { forceRefresh: true });
     expect(document.getElementById('avatar-limit-badge').textContent).toBe('85%');
   });
+
+  it('通常メッセージとつぶやき（ひとりごと）で吹き出しタイトルと is-quote クラスが切り替わる (Issue #56)', async () => {
+    // 初回同期（ベースライン記録）を完了させる
+    await vi.advanceTimersByTimeAsync(2000);
+
+    const bubble = document.getElementById('mascot-bubble');
+    const titleEl = bubble.querySelector('.mascot-bubble-title');
+    const avatarContainer = document.getElementById('avatar-container');
+
+    // 1. タッチリアクション（つぶやき系）の単クリックで is-quote & 💭 ひとりごと になる
+    avatarContainer.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, screenX: 100, screenY: 100 }));
+    window.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, screenX: 100, screenY: 100 }));
+    await vi.advanceTimersByTimeAsync(300);
+
+    expect(bubble.classList.contains('hidden')).toBe(false);
+    expect(bubble.classList.contains('is-quote')).toBe(true);
+    expect(titleEl.textContent).toBe('💭 ひとりごと');
+
+    // 2. 閉じるボタンで hidden かつ is-quote / タイトルがリセットされる
+    document.getElementById('btn-bubble-close').click();
+    expect(bubble.classList.contains('hidden')).toBe(true);
+    expect(bubble.classList.contains('is-quote')).toBe(false);
+    expect(titleEl.textContent).toBe('Muse');
+
+    // 3. Muse からの通常メッセージ受信時は is-quote 無し & タイトル Muse になる
+    if (eventListeners['session-visibility-changed']) {
+      eventListeners['session-visibility-changed']({ payload: false });
+    }
+    invokeMock.mockImplementation(async (cmd) => {
+      if (cmd === 'get_session_status') return { exists: true, visible: false, url: 'https://muse.ai/?__pwa=1' };
+      if (cmd === 'get_avatar_state') return { state: 'idle', statusText: 'リンク済み' };
+      if (cmd === 'get_chat_messages') {
+        return [
+          { role: 'assistant', text: '初期メッセージ' },
+          { role: 'assistant', text: '通常の新着返信です！' },
+        ];
+      }
+      return {};
+    });
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(bubble.classList.contains('hidden')).toBe(false);
+    expect(bubble.classList.contains('is-quote')).toBe(false);
+    expect(titleEl.textContent).toBe('Muse');
+  });
 });

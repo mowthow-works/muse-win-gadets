@@ -54,6 +54,7 @@ let unreadCount = 0;
 
 // マスコット吹き出し要素
 const mascotBubble = document.getElementById('mascot-bubble');
+const mascotBubbleTitle = mascotBubble ? mascotBubble.querySelector('.mascot-bubble-title') : null;
 const mascotBubbleText = document.getElementById('mascot-bubble-text');
 const mascotBubbleCursor = document.getElementById('mascot-bubble-cursor');
 const btnBubbleClose = document.getElementById('btn-bubble-close');
@@ -413,12 +414,24 @@ function startTypingLoop(text) {
   }, delay);
 }
 
-function playLupinTyping(text, options = []) {
+function applyMascotBubbleAppearance(kind) {
+  const isQuote = kind === 'quote';
+  if (mascotBubble) {
+    mascotBubble.classList.toggle('is-quote', isQuote);
+  }
+  if (mascotBubbleTitle) {
+    mascotBubbleTitle.textContent = isQuote ? '💭 ひとりごと' : 'Muse';
+  }
+}
+
+function playLupinTyping(text, options = [], meta = {}) {
   if (!mascotBubble || !mascotBubbleText) return;
   closeMascotInput();
   const cleanedText = cleanMascotMessageText(text);
   if (!cleanedText) return;
 
+  const kind = meta && meta.kind === 'quote' ? 'quote' : 'message';
+  applyMascotBubbleAppearance(kind);
   updateMascotBubbleDirection();
 
   // シームレス追記判定 (ストリーミング途中で更新された場合のチラつき・読み直し防止):
@@ -486,6 +499,10 @@ function hideMascotBubble() {
   }
   if (mascotBubble) {
     mascotBubble.classList.add('hidden');
+    mascotBubble.classList.remove('is-quote');
+  }
+  if (mascotBubbleTitle) {
+    mascotBubbleTitle.textContent = 'Muse';
   }
   if (mascotBubbleOptions) {
     mascotBubbleOptions.classList.add('hidden');
@@ -1562,7 +1579,7 @@ function checkIdleAction() {
     if (document.body.classList.contains('mode-mascot') && Math.random() <= selected.cfg.quote_probability) {
       const quote = pickRandomIdleQuote(selected.cfg.quotes);
       if (quote) {
-        playLupinTyping(quote);
+        playLupinTyping(quote, [], { kind: 'quote' });
       }
     }
   } else {
@@ -1572,7 +1589,7 @@ function checkIdleAction() {
     if (document.body.classList.contains('mode-mascot')) {
       const quote = pickRandomIdleQuote();
       if (quote) {
-        playLupinTyping(quote);
+        playLupinTyping(quote, [], { kind: 'quote' });
       }
     }
   }
@@ -2297,7 +2314,7 @@ window.addEventListener('DOMContentLoaded', async () => {
         playTouchReactionSound();
         if (document.body.classList.contains('mode-mascot') && touchReactionsList.length > 0) {
           const reaction = touchReactionsList[Math.floor(Math.random() * touchReactionsList.length)];
-          playLupinTyping(reaction);
+          playLupinTyping(reaction, [], { kind: 'quote' });
         }
       }, 260);
     } else if (avatarClickCount >= 2) {

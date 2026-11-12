@@ -1167,6 +1167,31 @@ body:not(.mode-mascot) .unread-badge {
   display: none !important;
 }
 
+.mascot-bubble.is-quote {
+  background: rgba(30, 41, 59, 0.88);
+  border: 1.5px dashed rgba(148, 163, 184, 0.55);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55);
+}
+
+.mascot-bubble.is-quote .mascot-bubble-tail {
+  border-right-color: rgba(30, 41, 59, 0.88);
+  filter: drop-shadow(-1.5px 0 0 rgba(148, 163, 184, 0.45));
+}
+
+body.mode-mascot .hero-card.bubble-on-left .mascot-bubble.is-quote .mascot-bubble-tail {
+  border-left-color: rgba(30, 41, 59, 0.88) !important;
+  filter: drop-shadow(1.5px 0 0 rgba(148, 163, 184, 0.45)) !important;
+}
+
+.mascot-bubble.is-quote .mascot-bubble-title {
+  color: #cbd5e1;
+}
+
+.mascot-bubble.is-quote .mascot-bubble-text {
+  color: #e2e8f0;
+  font-style: italic;
+}
+
 .mascot-bubble-tail {
   position: absolute;
   left: -8px;
