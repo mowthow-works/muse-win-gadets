@@ -138,7 +138,7 @@ pub struct ChatMessage {
     pub options: Option<Vec<String>>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct UsageLimitInfo {
     pub plan_name: String,
     pub used_percent: Option<u32>,
@@ -163,7 +163,7 @@ fn default_mascot_bubble_on_left() -> bool {
     true
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct GadgetConfig {
     pub size_mode: String, // "small", "large", or "mascot"
     #[serde(default = "default_last_normal_mode")]
@@ -215,6 +215,8 @@ impl Default for GadgetConfig {
 static CONFIG_STORE: OnceLock<Mutex<Option<GadgetConfig>>> = OnceLock::new();
 static LAST_MASCOT_POS: OnceLock<Mutex<Option<(i32, i32)>>> = OnceLock::new();
 static IS_RESTORING_MASCOT: AtomicBool = AtomicBool::new(false);
+static CONFIG_SAVE_GENERATION: AtomicU64 = AtomicU64::new(0);
+static CONFIG_DIRTY: AtomicBool = AtomicBool::new(false);
 
 fn config_mutex() -> &'static Mutex<Option<GadgetConfig>> {
     CONFIG_STORE.get_or_init(|| Mutex::new(None))
@@ -301,7 +303,7 @@ fn load_config_internal(app: &AppHandle) -> GadgetConfig {
     GadgetConfig::default()
 }
 
-fn save_config_internal(app: &AppHandle, config: &GadgetConfig) -> Result<(), String> {
+fn normalize_config_for_save(config: &GadgetConfig) -> GadgetConfig {
     let mut to_save = config.clone();
     if let Some(pos) = to_save.mascot_pos {
         if pos.0 > -10000 && pos.1 > -10000 {
@@ -312,11 +314,39 @@ fn save_config_internal(app: &AppHandle, config: &GadgetConfig) -> Result<(), St
     } else if let Some(last_pos) = get_last_mascot_pos() {
         to_save.mascot_pos = Some(last_pos);
     }
+    to_save
+}
+
+fn write_config_to_path_if_changed(
+    path: &std::path::Path,
+    prev: Option<&GadgetConfig>,
+    next: &GadgetConfig,
+) -> Result<bool, String> {
+    if let Some(prev_cfg) = prev {
+        if prev_cfg == next && path.exists() {
+            return Ok(false);
+        }
+    }
+    let content = serde_json::to_string_pretty(next).map_err(|e| e.to_string())?;
+    let tmp_path = path.with_extension("json.tmp");
+    if fs::write(&tmp_path, &content).is_ok() {
+        if fs::rename(&tmp_path, path).is_ok() {
+            return Ok(true);
+        }
+        let _ = fs::remove_file(&tmp_path);
+    }
+    fs::write(path, content).map_err(|e| format!("Save config error: {}", e))?;
+    Ok(true)
+}
+
+fn save_config_internal(app: &AppHandle, config: &GadgetConfig) -> Result<(), String> {
+    let to_save = normalize_config_for_save(config);
     if let Ok(mut guard) = config_mutex().lock() {
-        *guard = Some(to_save.clone());
         let path = get_config_path(app)?;
-        let content = serde_json::to_string_pretty(&to_save).map_err(|e| e.to_string())?;
-        fs::write(path, content).map_err(|e| format!("Save config error: {}", e))?;
+        let prev = guard.as_ref();
+        let _ = write_config_to_path_if_changed(&path, prev, &to_save)?;
+        *guard = Some(to_save);
+        CONFIG_DIRTY.store(false, Ordering::SeqCst);
     }
     Ok(())
 }
@@ -329,6 +359,74 @@ where
     updater(&mut cfg);
     let _ = save_config_internal(app, &cfg);
     cfg
+}
+
+fn update_config_memory_only<F>(app: &AppHandle, updater: F) -> GadgetConfig
+where
+    F: FnOnce(&mut GadgetConfig),
+{
+    let mut cfg = load_config_internal(app);
+    updater(&mut cfg);
+    let normalized = normalize_config_for_save(&cfg);
+    if let Ok(mut guard) = config_mutex().lock() {
+        *guard = Some(normalized.clone());
+    }
+    normalized
+}
+
+fn flush_config_to_disk(app: &AppHandle) {
+    if !CONFIG_DIRTY.load(Ordering::SeqCst) {
+        return;
+    }
+    let snapshot = if let Ok(guard) = config_mutex().lock() {
+        guard.clone()
+    } else {
+        None
+    };
+    if let Some(cfg) = snapshot {
+        if let Ok(path) = get_config_path(app) {
+            if write_config_to_path_if_changed(&path, None, &cfg).is_ok() {
+                CONFIG_DIRTY.store(false, Ordering::SeqCst);
+            }
+        }
+    }
+}
+
+fn schedule_debounced_config_update<F>(app: &AppHandle, updater: F)
+where
+    F: FnOnce(&mut GadgetConfig),
+{
+    let mut cfg = load_config_internal(app);
+    let before = cfg.clone();
+    updater(&mut cfg);
+    let normalized = normalize_config_for_save(&cfg);
+    if before == normalized {
+        return;
+    }
+    if let Ok(mut guard) = config_mutex().lock() {
+        *guard = Some(normalized);
+    }
+    CONFIG_DIRTY.store(true, Ordering::SeqCst);
+    let gen = CONFIG_SAVE_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+    let app_clone = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        if CONFIG_SAVE_GENERATION.load(Ordering::SeqCst) == gen {
+            flush_config_to_disk(&app_clone);
+        }
+    });
+}
+
+fn has_usage_limit_changed(prev: Option<&UsageLimitInfo>, next: &UsageLimitInfo) -> bool {
+    match prev {
+        None => true,
+        Some(p) => {
+            p.used_percent != next.used_percent
+                || p.remaining_percent != next.remaining_percent
+                || p.reset_text != next.reset_text
+                || p.plan_name != next.plan_name
+        }
+    }
 }
 
 fn is_session_allowed_host(host: &str) -> bool {
@@ -466,7 +564,7 @@ fn ensure_session_window(app: &AppHandle) -> Result<WebviewWindow, String> {
                 tauri::async_runtime::spawn(async move {
                     if let Some(s) = h.get_webview_window("session") {
                         if !s.is_minimized().unwrap_or(false) && s.is_visible().unwrap_or(false) {
-                            update_config_internal(&h, |config| {
+                            schedule_debounced_config_update(&h, |config| {
                                 config.session_pos = Some((x, y));
                             });
                         }
@@ -491,7 +589,7 @@ fn ensure_session_window(app: &AppHandle) -> Result<WebviewWindow, String> {
                                 let w = w_raw as f64 / scale;
                                 let h_val = h_raw as f64 / scale;
                                 if w >= 250.0 && h_val >= 250.0 {
-                                    update_config_internal(&h, |config| {
+                                    schedule_debounced_config_update(&h, |config| {
                                         config.session_size = Some((w, h_val));
                                     });
                                 }
@@ -1397,10 +1495,18 @@ async fn get_usage_limit(
     };
 
     if info.used_percent.is_some() || info.remaining_percent.is_some() {
+        let prev_cfg = load_config_internal(&app);
+        let changed = has_usage_limit_changed(prev_cfg.last_limit_info.as_ref(), &info);
         let saved = info.clone();
-        update_config_internal(&app, |cfg| {
-            cfg.last_limit_info = Some(saved);
-        });
+        if changed {
+            update_config_internal(&app, |cfg| {
+                cfg.last_limit_info = Some(saved);
+            });
+        } else {
+            update_config_memory_only(&app, |cfg| {
+                cfg.last_limit_info = Some(saved);
+            });
+        }
         return Ok(info);
     }
 
@@ -2572,6 +2678,7 @@ pub fn run() {
                         });
                     }
                     "quit" => {
+                        flush_config_to_disk(app);
                         app.exit(0);
                     }
                     _ => {}
@@ -2647,6 +2754,7 @@ pub fn run() {
                     match event {
                         tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed => {
                             // main ウィンドウが閉じられた場合はプロセスを残さず確実に完全終了
+                            flush_config_to_disk(&app_handle_for_events);
                             app_handle_for_events.exit(0);
                         }
                         tauri::WindowEvent::Moved(pos) => {
@@ -2662,7 +2770,7 @@ pub fn run() {
                                     return;
                                 }
                             }
-                            update_config_internal(&app_handle_for_events, |cfg| {
+                            schedule_debounced_config_update(&app_handle_for_events, |cfg| {
                                 if cfg.size_mode == "mascot" {
                                     set_last_mascot_pos((pos.x, pos.y));
                                     cfg.mascot_pos = Some((pos.x, pos.y));
@@ -3071,5 +3179,46 @@ mod tests {
                 should_apply_os: true,
             }
         );
+    }
+
+    #[test]
+    fn test_write_config_to_path_if_changed_and_usage_limit_diff() {
+        let tmp_base = std::env::temp_dir().join(format!("muse_cfg_perf_test_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp_base);
+        fs::create_dir_all(&tmp_base).unwrap();
+        let cfg_path = tmp_base.join("gadget_config.json");
+
+        let cfg1 = GadgetConfig::default();
+        // 初回はファイルが無いため書き出される
+        assert!(write_config_to_path_if_changed(&cfg_path, None, &cfg1).unwrap());
+        assert!(cfg_path.exists());
+        assert!(!cfg_path.with_extension("json.tmp").exists());
+
+        // 同一内容ならスキップされる (false)
+        assert!(!write_config_to_path_if_changed(&cfg_path, Some(&cfg1), &cfg1).unwrap());
+
+        // 内容が変わったら書き出される (true)
+        let mut cfg2 = cfg1.clone();
+        cfg2.autostart_enabled = Some(true);
+        assert!(write_config_to_path_if_changed(&cfg_path, Some(&cfg1), &cfg2).unwrap());
+
+        // UsageLimitInfo は updated_at のみの変化なら変更なし扱い
+        let lim1 = UsageLimitInfo {
+            plan_name: "Pro".to_string(),
+            used_percent: Some(42),
+            remaining_percent: Some(58),
+            reset_text: "1週間の上限".to_string(),
+            updated_at: "2026-11-12 22:00:00".to_string(),
+        };
+        let mut lim2 = lim1.clone();
+        lim2.updated_at = "2026-11-12 22:02:00".to_string();
+        assert!(!has_usage_limit_changed(Some(&lim1), &lim2));
+
+        lim2.used_percent = Some(43);
+        lim2.remaining_percent = Some(57);
+        assert!(has_usage_limit_changed(Some(&lim1), &lim2));
+        assert!(has_usage_limit_changed(None, &lim1));
+
+        let _ = fs::remove_dir_all(&tmp_base);
     }
 }
