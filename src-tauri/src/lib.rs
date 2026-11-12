@@ -187,6 +187,8 @@ pub struct GadgetConfig {
     pub session_pos: Option<(i32, i32)>,
     #[serde(default)]
     pub session_size: Option<(f64, f64)>,
+    #[serde(default)]
+    pub autostart_enabled: Option<bool>,
 }
 
 impl Default for GadgetConfig {
@@ -205,6 +207,7 @@ impl Default for GadgetConfig {
             mascot_pos: None,
             session_pos: None,
             session_size: None,
+            autostart_enabled: None,
         }
     }
 }
@@ -2275,6 +2278,66 @@ fn close_window(app: AppHandle) {
     app.exit(0);
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct AutostartReconcilePlan {
+    desired_enabled: bool,
+    should_save_config: bool,
+    should_apply_os: bool,
+}
+
+fn plan_autostart_reconciliation(saved: Option<bool>, os_enabled: bool) -> AutostartReconcilePlan {
+    match saved {
+        None => AutostartReconcilePlan {
+            desired_enabled: os_enabled,
+            should_save_config: true,
+            should_apply_os: false,
+        },
+        Some(desired) => AutostartReconcilePlan {
+            desired_enabled: desired,
+            should_save_config: false,
+            should_apply_os: desired != os_enabled,
+        },
+    }
+}
+
+fn sync_autostart_on_startup(app: &AppHandle) -> bool {
+    let config = load_config_internal(app);
+    let autolaunch = app.autolaunch();
+    let os_enabled = autolaunch.is_enabled().unwrap_or(false);
+    let plan = plan_autostart_reconciliation(config.autostart_enabled, os_enabled);
+
+    if plan.should_save_config {
+        update_config_internal(app, |cfg| {
+            cfg.autostart_enabled = Some(plan.desired_enabled);
+        });
+    }
+
+    if plan.should_apply_os {
+        let apply_res = if plan.desired_enabled {
+            autolaunch.enable()
+        } else {
+            autolaunch.disable()
+        };
+        append_recovery_log(
+            app,
+            "autostart_reconcile",
+            &format!(
+                "saved={:?}, os_enabled={}, desired={}, ok={}",
+                config.autostart_enabled,
+                os_enabled,
+                plan.desired_enabled,
+                apply_res.is_ok()
+            ),
+        );
+        if apply_res.is_ok() {
+            return plan.desired_enabled;
+        }
+        return os_enabled;
+    }
+
+    plan.desired_enabled
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -2297,8 +2360,8 @@ pub fn run() {
             let toggle_mascot = MenuItem::with_id(handle, "toggle_mascot", "マスコットモード (アバター単体)", true, None::<&str>)?;
             let item_reset_pos = MenuItem::with_id(handle, "reset_mascot_pos", "マスコット位置を初期位置に戻す", true, None::<&str>)?;
 
-            // スタートアップ自動起動の初期化 (Issue #22)
-            let is_autostart = handle.autolaunch().is_enabled().unwrap_or(false);
+            // スタートアップ自動起動の初期化・永続化同期 (Issue #22, #53)
+            let is_autostart = sync_autostart_on_startup(handle);
             let item_autostart = CheckMenuItem::with_id(
                 handle,
                 "toggle_autostart",
@@ -2446,10 +2509,16 @@ pub fn run() {
                         if currently_enabled {
                             if autolaunch.disable().is_ok() {
                                 let _ = item_autostart_clone.set_checked(false);
+                                update_config_internal(app, |cfg| {
+                                    cfg.autostart_enabled = Some(false);
+                                });
                             }
                         } else {
                             if autolaunch.enable().is_ok() {
                                 let _ = item_autostart_clone.set_checked(true);
+                                update_config_internal(app, |cfg| {
+                                    cfg.autostart_enabled = Some(true);
+                                });
                             }
                         }
                     }
@@ -2943,5 +3012,64 @@ mod tests {
         assert!(should_open_session_url_externally(&google_search));
         assert!(should_open_session_url_externally(&mailto_url));
         assert!(!should_open_session_url_externally(&about_blank));
+    }
+
+    #[test]
+    fn test_plan_autostart_reconciliation() {
+        // 初回移行時（config 未保存）は OS の現在状態を取り込んで config に保存する
+        assert_eq!(
+            plan_autostart_reconciliation(None, true),
+            AutostartReconcilePlan {
+                desired_enabled: true,
+                should_save_config: true,
+                should_apply_os: false,
+            }
+        );
+        assert_eq!(
+            plan_autostart_reconciliation(None, false),
+            AutostartReconcilePlan {
+                desired_enabled: false,
+                should_save_config: true,
+                should_apply_os: false,
+            }
+        );
+
+        // config が true なのに OS 側が消えている場合は自動復元する
+        assert_eq!(
+            plan_autostart_reconciliation(Some(true), false),
+            AutostartReconcilePlan {
+                desired_enabled: true,
+                should_save_config: false,
+                should_apply_os: true,
+            }
+        );
+
+        // config と OS 側が一致していれば何もしない
+        assert_eq!(
+            plan_autostart_reconciliation(Some(true), true),
+            AutostartReconcilePlan {
+                desired_enabled: true,
+                should_save_config: false,
+                should_apply_os: false,
+            }
+        );
+        assert_eq!(
+            plan_autostart_reconciliation(Some(false), false),
+            AutostartReconcilePlan {
+                desired_enabled: false,
+                should_save_config: false,
+                should_apply_os: false,
+            }
+        );
+
+        // config が false なのに OS 側が有効な場合は無効化して同期する
+        assert_eq!(
+            plan_autostart_reconciliation(Some(false), true),
+            AutostartReconcilePlan {
+                desired_enabled: false,
+                should_save_config: false,
+                should_apply_os: true,
+            }
+        );
     }
 }
