@@ -364,4 +364,39 @@ describe('session_bridge.js DOM Scraping & Guardrails Suite', () => {
     expect(closeClicked).toBe(false);
     expect(escapeDispatched).toBe(false);
   });
+
+  it('inspectReloadSafety (Issue #52): 生成中（停止ボタン）および未送信下書きの有無を正確に判定する', () => {
+    document.body.innerHTML = `
+      <main>
+        <textarea placeholder="メッセージを入力"></textarea>
+      </main>
+    `;
+    const ta = document.querySelector('textarea');
+
+    // 1. 何も入力されておらず停止ボタンも無い場合
+    let safety = window.__MUSE_BRIDGE__.inspectReloadSafety();
+    expect(safety.isGenerating).toBe(false);
+    expect(safety.hasDraft).toBe(false);
+    expect(safety.draftLength).toBe(0);
+
+    // 2. 空白のみの場合は下書きなし扱い
+    ta.value = '   \n  ';
+    safety = window.__MUSE_BRIDGE__.inspectReloadSafety();
+    expect(safety.hasDraft).toBe(false);
+
+    // 3. 未送信の下書きがある場合
+    ta.value = 'まだ送っていない質問';
+    safety = window.__MUSE_BRIDGE__.inspectReloadSafety();
+    expect(safety.hasDraft).toBe(true);
+    expect(safety.draftLength).toBe(10);
+
+    // 4. 下書きを消して停止ボタンが現れた場合（回答生成中）
+    ta.value = '';
+    const stopBtn = document.createElement('button');
+    stopBtn.setAttribute('aria-label', '回答の生成を停止');
+    document.querySelector('main').appendChild(stopBtn);
+    safety = window.__MUSE_BRIDGE__.inspectReloadSafety();
+    expect(safety.isGenerating).toBe(true);
+    expect(safety.hasDraft).toBe(false);
+  });
 });

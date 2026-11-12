@@ -43,6 +43,56 @@ pub struct AvatarVideoPack {
 static NONCE_COUNTER: AtomicU64 = AtomicU64::new(1);
 static CURRENT_DOC_TITLE: OnceLock<Mutex<String>> = OnceLock::new();
 static BRIDGE_BUSY: AtomicBool = AtomicBool::new(false);
+static SESSION_RELOADING: AtomicBool = AtomicBool::new(false);
+
+struct SessionReloadGuard;
+impl Drop for SessionReloadGuard {
+    fn drop(&mut self) {
+        SESSION_RELOADING.store(false, Ordering::Release);
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct SessionReloadResult {
+    pub executed: bool,
+    pub success: bool,
+    pub reason: String,
+    pub skipped_reason: Option<String>,
+    pub before_url: String,
+    pub after_url: String,
+    pub url_matched: bool,
+    pub ready: bool,
+}
+
+pub fn format_recovery_log_line(timestamp: &str, event: &str, detail: &str) -> String {
+    format!("[{}] [{}] {}\n", timestamp, event, detail)
+}
+
+pub fn append_recovery_log_to_path(log_path: &std::path::Path, event: &str, detail: &str) {
+    if let Some(parent) = log_path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    if let Ok(meta) = fs::metadata(log_path) {
+        if meta.len() > 1_048_576 {
+            let old_path = log_path.with_extension("log.old");
+            let _ = fs::remove_file(&old_path);
+            let _ = fs::rename(log_path, &old_path);
+        }
+    }
+    let ts = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let line = format_recovery_log_line(&ts, event, detail);
+    if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(log_path) {
+        use std::io::Write;
+        let _ = file.write_all(line.as_bytes());
+    }
+}
+
+fn append_recovery_log(app: &AppHandle, event: &str, detail: &str) {
+    if let Ok(data_dir) = app.path().app_local_data_dir() {
+        let log_path = data_dir.join("session_recovery.log");
+        append_recovery_log_to_path(&log_path, event, detail);
+    }
+}
 
 fn doc_title_store() -> &'static Mutex<String> {
     CURRENT_DOC_TITLE.get_or_init(|| Mutex::new(String::new()))
@@ -819,6 +869,12 @@ fn extract_latest_assistant_text(messages_val: &serde_json::Value) -> Option<Str
 fn normalize_url_for_compare(u: &str) -> String {
     let base = u.trim().split('?').next().unwrap_or("").split('#').next().unwrap_or("");
     base.trim_end_matches('/').to_lowercase()
+}
+
+pub fn is_same_chat_url(before_url: &str, after_url: &str) -> bool {
+    let b = normalize_url_for_compare(before_url);
+    let a = normalize_url_for_compare(after_url);
+    !b.is_empty() && b == a
 }
 
 async fn wait_for_chat_ready(
@@ -1944,6 +2000,199 @@ async fn get_session_status(app: AppHandle) -> Result<SessionStatus, String> {
 }
 
 #[tauri::command]
+fn log_session_recovery_event(app: AppHandle, event: String, detail: String) -> bool {
+    append_recovery_log(&app, &event, &detail);
+    true
+}
+
+#[tauri::command]
+async fn inspect_session_reload_safety(app: AppHandle) -> Result<serde_json::Value, String> {
+    let session = ensure_session_window(&app)?;
+    run_bridge_action(&session, "inspect_reload_safety", &serde_json::json!({}), 3000).await
+}
+
+#[tauri::command]
+async fn reload_session(
+    app: AppHandle,
+    reason: Option<String>,
+    force: Option<bool>,
+) -> Result<SessionReloadResult, String> {
+    let reason_str = reason.unwrap_or_else(|| "manual".to_string());
+    let is_force = force.unwrap_or(false);
+
+    if SESSION_RELOADING
+        .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+        .is_err()
+    {
+        append_recovery_log(
+            &app,
+            "reload_skipped",
+            &format!("reason={}, guard=already_reloading", reason_str),
+        );
+        return Ok(SessionReloadResult {
+            executed: false,
+            success: false,
+            reason: reason_str,
+            skipped_reason: Some("already_reloading".to_string()),
+            before_url: String::new(),
+            after_url: String::new(),
+            url_matched: false,
+            ready: false,
+        });
+    }
+    let _reload_guard = SessionReloadGuard;
+
+    let session = ensure_session_window(&app)?;
+    let before_url = session.url().ok().map(|u| u.to_string()).unwrap_or_default();
+
+    if !is_force {
+        let is_visible = session.is_visible().unwrap_or(false) && !session.is_minimized().unwrap_or(false);
+        if is_visible {
+            append_recovery_log(
+                &app,
+                "reload_skipped",
+                &format!("reason={}, guard=session_visible, url={}", reason_str, before_url),
+            );
+            return Ok(SessionReloadResult {
+                executed: false,
+                success: false,
+                reason: reason_str,
+                skipped_reason: Some("session_visible".to_string()),
+                before_url: before_url.clone(),
+                after_url: before_url,
+                url_matched: true,
+                ready: false,
+            });
+        }
+
+        match run_bridge_action(&session, "inspect_reload_safety", &serde_json::json!({}), 3000).await {
+            Ok(val) => {
+                if val.get("isGenerating").and_then(|v| v.as_bool()).unwrap_or(false) {
+                    append_recovery_log(
+                        &app,
+                        "reload_skipped",
+                        &format!("reason={}, guard=session_generating, url={}", reason_str, before_url),
+                    );
+                    return Ok(SessionReloadResult {
+                        executed: false,
+                        success: false,
+                        reason: reason_str,
+                        skipped_reason: Some("session_generating".to_string()),
+                        before_url: before_url.clone(),
+                        after_url: before_url,
+                        url_matched: true,
+                        ready: false,
+                    });
+                }
+                if val.get("hasDraft").and_then(|v| v.as_bool()).unwrap_or(false) {
+                    append_recovery_log(
+                        &app,
+                        "reload_skipped",
+                        &format!("reason={}, guard=session_draft_present, url={}", reason_str, before_url),
+                    );
+                    return Ok(SessionReloadResult {
+                        executed: false,
+                        success: false,
+                        reason: reason_str,
+                        skipped_reason: Some("session_draft_present".to_string()),
+                        before_url: before_url.clone(),
+                        after_url: before_url,
+                        url_matched: true,
+                        ready: false,
+                    });
+                }
+            }
+            Err(err) => {
+                append_recovery_log(
+                    &app,
+                    "reload_skipped",
+                    &format!("reason={}, guard=safety_check_unavailable ({}), url={}", reason_str, err, before_url),
+                );
+                return Ok(SessionReloadResult {
+                    executed: false,
+                    success: false,
+                    reason: reason_str,
+                    skipped_reason: Some("safety_check_unavailable".to_string()),
+                    before_url: before_url.clone(),
+                    after_url: before_url,
+                    url_matched: true,
+                    ready: false,
+                });
+            }
+        }
+    }
+
+    append_recovery_log(
+        &app,
+        "reload_start",
+        &format!("reason={}, force={}, before_url={}", reason_str, is_force, before_url),
+    );
+
+    if let Err(e) = session.reload() {
+        let msg = format!("Session reload failed: {}", e);
+        append_recovery_log(
+            &app,
+            "reload_failed",
+            &format!("reason={}, error={}, before_url={}", reason_str, msg, before_url),
+        );
+        return Err(msg);
+    }
+
+    let mut final_ready = wait_for_chat_ready(&session, None, 15000, true)
+        .await
+        .unwrap_or(false);
+    let mut after_url = session.url().ok().map(|u| u.to_string()).unwrap_or_default();
+    let mut url_matched = is_same_chat_url(&before_url, &after_url);
+
+    if !url_matched && before_url.starts_with("https://") {
+        append_recovery_log(
+            &app,
+            "reload_url_mismatch",
+            &format!(
+                "reason={}, before_url={}, after_url={} (attempting restore)",
+                reason_str, before_url, after_url
+            ),
+        );
+        if let Ok(parsed_url) = before_url.parse::<tauri::Url>() {
+            if session.navigate(parsed_url).is_ok() {
+                final_ready = wait_for_chat_ready(&session, Some(&before_url), 15000, true)
+                    .await
+                    .unwrap_or(false);
+                after_url = session.url().ok().map(|u| u.to_string()).unwrap_or_default();
+                url_matched = is_same_chat_url(&before_url, &after_url);
+            }
+        }
+    }
+
+    let success = final_ready && url_matched;
+    append_recovery_log(
+        &app,
+        if success { "reload_success" } else { "reload_incomplete" },
+        &format!(
+            "reason={}, ready={}, url_matched={}, before_url={}, after_url={}",
+            reason_str, final_ready, url_matched, before_url, after_url
+        ),
+    );
+
+    let res = SessionReloadResult {
+        executed: true,
+        success,
+        reason: reason_str,
+        skipped_reason: None,
+        before_url,
+        after_url,
+        url_matched,
+        ready: final_ready,
+    };
+
+    if let Some(main_win) = app.get_webview_window("main") {
+        let _ = main_win.emit("session-reloaded", &res);
+    }
+
+    Ok(res)
+}
+
+#[tauri::command]
 fn drag_window(window: tauri::Window) {
     let _ = window.start_dragging();
 }
@@ -1973,6 +2222,7 @@ pub fn run() {
             // システムトレイの初期化
             let toggle_app = MenuItem::with_id(handle, "toggle_app", "セッション画面 ⇄ マスコット (Ctrl+Shift+M)", true, None::<&str>)?;
             let open_session = MenuItem::with_id(handle, "open_session", "セッション画面を開く (公式UI)", true, None::<&str>)?;
+            let reload_session_item = MenuItem::with_id(handle, "reload_session", "セッションを再読み込み", true, None::<&str>)?;
             let item_settings = MenuItem::with_id(handle, "open_settings", "設定...", true, None::<&str>)?;
             let item_open_mascot_devtools = MenuItem::with_id(handle, "open_mascot_devtools", "マスコットの開発者ツールを開く", true, None::<&str>)?;
             let item_open_session_devtools = MenuItem::with_id(handle, "open_devtools", "セッションの開発者ツールを開く", true, None::<&str>)?;
@@ -2053,6 +2303,7 @@ pub fn run() {
                 &[
                     &toggle_app,
                     &open_session,
+                    &reload_session_item,
                     &item_settings,
                     &item_open_mascot_devtools,
                     &item_open_session_devtools,
@@ -2082,6 +2333,12 @@ pub fn run() {
                         let app_clone = app.clone();
                         tauri::async_runtime::spawn(async move {
                             let _ = open_or_show_session(app_clone).await;
+                        });
+                    }
+                    "reload_session" => {
+                        let app_clone = app.clone();
+                        tauri::async_runtime::spawn(async move {
+                            let _ = reload_session(app_clone, Some("manual_tray".to_string()), Some(true)).await;
                         });
                     }
                     "open_settings" => {
@@ -2320,6 +2577,9 @@ pub fn run() {
             open_in_browser,
             open_or_show_session,
             hide_session,
+            reload_session,
+            inspect_session_reload_safety,
+            log_session_recovery_event,
             open_mascot_devtools,
             open_session_devtools,
             get_session_status,
@@ -2548,6 +2808,50 @@ mod tests {
         // 第2ディレクトリ(dir_fallback)の sleeping.mp4 もマージ収集されていること
         let expected_sleeping = format!("data:video/mp4;base64,{}", BASE64_STANDARD.encode(b"default_sleeping"));
         assert_eq!(sleeping.data_url, expected_sleeping);
+
+        let _ = fs::remove_dir_all(&tmp_base);
+    }
+
+    #[test]
+    fn test_is_same_chat_url() {
+        assert!(is_same_chat_url(
+            "https://muse.ai/thread/76e0499a-0c43-4644-87db-95b14cf2bdac",
+            "https://muse.ai/thread/76e0499a-0c43-4644-87db-95b14cf2bdac/?__pwa=1"
+        ));
+        assert!(is_same_chat_url(
+            "https://muse.ai/?__pwa=1",
+            "https://muse.ai/"
+        ));
+        assert!(!is_same_chat_url(
+            "https://muse.ai/thread/76e0499a-0c43-4644-87db-95b14cf2bdac",
+            "https://muse.ai/"
+        ));
+        assert!(!is_same_chat_url("", "https://muse.ai/"));
+    }
+
+    #[test]
+    fn test_append_recovery_log_to_path_and_rotation() {
+        let tmp_base = std::env::temp_dir().join(format!("muse_recovery_log_test_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp_base);
+        let log_path = tmp_base.join("session_recovery.log");
+
+        append_recovery_log_to_path(&log_path, "sleep_resume", "reason=sleep_resume, ready=true");
+        append_recovery_log_to_path(&log_path, "reload_success", "url_matched=true");
+
+        let body = fs::read_to_string(&log_path).expect("log file should exist");
+        assert!(body.contains("[sleep_resume] reason=sleep_resume, ready=true"));
+        assert!(body.contains("[reload_success] url_matched=true"));
+
+        // 1MB 超えでローテートされることを確認
+        let oversized = vec![b'x'; 1_048_600];
+        fs::write(&log_path, oversized).unwrap();
+        append_recovery_log_to_path(&log_path, "post_rotate", "ok=true");
+
+        let old_path = log_path.with_extension("log.old");
+        assert!(old_path.exists());
+        let rotated_body = fs::read_to_string(&log_path).unwrap();
+        assert!(rotated_body.contains("[post_rotate] ok=true"));
+        assert!(rotated_body.len() < 1024);
 
         let _ = fs::remove_dir_all(&tmp_base);
     }

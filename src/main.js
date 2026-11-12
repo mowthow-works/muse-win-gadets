@@ -1793,15 +1793,147 @@ function adjustTextareaHeight() {
 }
 
 // ==========================================
-// 4. 利用枠（ウィンドウリミット）(R5)
+// 4. 利用枠（ウィンドウリミット）＆ セッション自動リカバリ (R5, Issue #52)
 // ==========================================
-async function loadUsageLimit(forceRefresh = false) {
+const SLEEP_RESUME_THRESHOLD_MS = 3 * 60 * 1000;
+const USAGE_LIMIT_FAILURE_THRESHOLD = 2;
+
+let lastHeartbeatAt = Date.now();
+let consecutiveUsageLimitFailures = 0;
+let hasAttemptedFallbackReloadInEpisode = false;
+let isReloadingSession = false;
+
+async function checkAutoReloadGuards() {
+  if (isReloadingSession) {
+    return { allowed: false, reason: 'already_reloading' };
+  }
+  if (isSessionVisible) {
+    return { allowed: false, reason: 'session_visible' };
+  }
+  if (isWakingForLiveQuotes || isNavigatingForWake) {
+    return { allowed: false, reason: 'wake_in_progress' };
+  }
+  if (
+    isSendingMessage ||
+    latestMuseSyncedState === 'working' ||
+    latestMuseSyncedState === 'making_something'
+  ) {
+    return { allowed: false, reason: 'generating_or_sending' };
+  }
+
+  const mainDraft = (chatInput?.value || '').trim();
+  const miniDraft = (mascotInputField?.value || '').trim();
+  if (mainDraft.length > 0 || miniDraft.length > 0) {
+    return { allowed: false, reason: 'mascot_draft_present' };
+  }
+
+  try {
+    const status = await invoke('get_session_status');
+    if (status && status.visible) {
+      return { allowed: false, reason: 'session_visible' };
+    }
+    const safety = await invoke('inspect_session_reload_safety');
+    if (safety && safety.isGenerating) {
+      return { allowed: false, reason: 'session_generating' };
+    }
+    if (safety && safety.hasDraft) {
+      return { allowed: false, reason: 'session_draft_present' };
+    }
+  } catch (err) {
+    console.warn('[SessionRecovery] safety inspection error:', err);
+    return { allowed: false, reason: 'safety_check_error' };
+  }
+
+  return { allowed: true, reason: null };
+}
+
+async function recoverSessionAndRefetchLimit(triggerReason, options = {}) {
+  const isForce = options.force === true;
+  if (isReloadingSession) {
+    console.info('[SessionRecovery] skipped (already_reloading)', { triggerReason });
+    invoke('log_session_recovery_event', {
+      event: 'reload_skipped',
+      detail: `reason=${triggerReason}, guard=already_reloading`
+    }).catch(() => {});
+    return { executed: false, skippedReason: 'already_reloading' };
+  }
+
+  if (!isForce && triggerReason === 'usage_limit_consecutive_failure' && hasAttemptedFallbackReloadInEpisode) {
+    console.info('[SessionRecovery] skipped (episode_limit_reached)', { triggerReason });
+    invoke('log_session_recovery_event', {
+      event: 'reload_skipped',
+      detail: `reason=${triggerReason}, guard=episode_limit_reached`
+    }).catch(() => {});
+    return { executed: false, skippedReason: 'episode_limit_reached' };
+  }
+
+  if (!isForce) {
+    const guard = await checkAutoReloadGuards();
+    if (!guard.allowed) {
+      console.info('[SessionRecovery] skipped by guard', { triggerReason, guardReason: guard.reason });
+      invoke('log_session_recovery_event', {
+        event: 'reload_skipped',
+        detail: `reason=${triggerReason}, guard=${guard.reason}`
+      }).catch(() => {});
+      return { executed: false, skippedReason: guard.reason };
+    }
+  }
+
+  if (!isForce && triggerReason === 'usage_limit_consecutive_failure') {
+    hasAttemptedFallbackReloadInEpisode = true;
+  }
+
+  isReloadingSession = true;
+  try {
+    console.info('[SessionRecovery] starting session reload', { triggerReason, force: isForce });
+    const res = await invoke('reload_session', { reason: triggerReason, force: isForce });
+    if (!res || !res.executed) {
+      console.info('[SessionRecovery] reload skipped by backend', { triggerReason, res });
+      return res || { executed: false, skippedReason: 'backend_skipped' };
+    }
+
+    if (!res.url_matched) {
+      console.warn('[SessionRecovery] chat URL changed across reload', {
+        triggerReason,
+        beforeUrl: res.before_url,
+        afterUrl: res.after_url
+      });
+    }
+
+    if (res.ready) {
+      console.info('[SessionRecovery] reload ready; refetching usage limit', {
+        triggerReason,
+        urlMatched: res.url_matched,
+        afterUrl: res.after_url
+      });
+      await loadUsageLimit(true, { skipFallbackReload: true, allowDuringReload: true });
+    } else {
+      console.warn('[SessionRecovery] reload finished without chat ready', { triggerReason, res });
+    }
+    return res;
+  } catch (err) {
+    console.warn('[SessionRecovery] reload error:', err);
+    invoke('log_session_recovery_event', {
+      event: 'reload_error',
+      detail: `reason=${triggerReason}, error=${err?.message || String(err)}`
+    }).catch(() => {});
+    return { executed: false, success: false, error: String(err) };
+  } finally {
+    isReloadingSession = false;
+  }
+}
+
+async function loadUsageLimit(forceRefresh = false, options = {}) {
+  if (isReloadingSession && !options.allowDuringReload) return;
+
+  let fetchedValid = false;
   try {
     const limit = await invoke('get_usage_limit', { forceRefresh });
     if (limit) {
       planBadge.textContent = limit.plan_name || '無料プラン';
 
       if (limit.remaining_percent !== null && limit.remaining_percent !== undefined) {
+        fetchedValid = true;
         const pct = limit.remaining_percent;
         limitPercentText.textContent = `残 ${pct}%`;
         limitProgressBar.style.width = `${pct}%`;
@@ -1834,6 +1966,9 @@ async function loadUsageLimit(forceRefresh = false) {
           avatarLimitBadgeEl.title = `利用可能枠: 残り ${pct}% (${limit.reset_text || ''})`;
         }
       } else {
+        if (limit.used_percent !== null && limit.used_percent !== undefined) {
+          fetchedValid = true;
+        }
         // すでに有効なパーセントが表示されている場合は '--%' で消さず維持
         const curBadge = avatarLimitBadgeEl ? avatarLimitBadgeEl.textContent.trim() : '';
         if (!curBadge || curBadge === '--%') {
@@ -1853,6 +1988,35 @@ async function loadUsageLimit(forceRefresh = false) {
     }
   } catch (err) {
     console.warn('loadUsageLimit error:', err);
+  }
+
+  if (fetchedValid) {
+    if (consecutiveUsageLimitFailures > 0 || options.allowDuringReload) {
+      invoke('log_session_recovery_event', {
+        event: 'usage_limit_refetch_ok',
+        detail: `after_failures=${consecutiveUsageLimitFailures}`
+      }).catch(() => {});
+    }
+    consecutiveUsageLimitFailures = 0;
+    hasAttemptedFallbackReloadInEpisode = false;
+  } else if (forceRefresh && !isSessionVisible) {
+    consecutiveUsageLimitFailures += 1;
+    console.warn('[SessionRecovery] forced usage limit fetch failed', {
+      consecutiveUsageLimitFailures,
+      hasAttemptedFallbackReloadInEpisode
+    });
+    invoke('log_session_recovery_event', {
+      event: 'usage_limit_fetch_failed',
+      detail: `consecutive=${consecutiveUsageLimitFailures}, fallback_used=${hasAttemptedFallbackReloadInEpisode}`
+    }).catch(() => {});
+
+    if (
+      !options.skipFallbackReload &&
+      !hasAttemptedFallbackReloadInEpisode &&
+      consecutiveUsageLimitFailures >= USAGE_LIMIT_FAILURE_THRESHOLD
+    ) {
+      await recoverSessionAndRefetchLimit('usage_limit_consecutive_failure');
+    }
   }
 }
 
@@ -2249,6 +2413,14 @@ window.addEventListener('DOMContentLoaded', async () => {
     window.__TAURI__.event.listen('mascot-scale-changed', (event) => {
       applyMascotScale(event.payload);
     });
+    // セッション画面リロード完了イベントを受信（手動トレイ操作等）(Issue #52)
+    window.__TAURI__.event.listen('session-reloaded', (event) => {
+      const payload = event?.payload || {};
+      console.info('[SessionRecovery] session-reloaded event', payload);
+      if (!isReloadingSession && payload.executed && payload.ready) {
+        loadUsageLimit(true, { skipFallbackReload: true });
+      }
+    });
   }
 
   // 初期起動時は確実に未読バッジを非表示 (Issue #20)
@@ -2344,16 +2516,31 @@ window.addEventListener('DOMContentLoaded', async () => {
     }
   }, 16000);
 
-  // 3秒ごとのリアルタイム動作状態・チャット同期 ＆ 設定ホットリロード・放置監視
+  // 3秒ごとのリアルタイム動作状態・チャット同期 ＆ 設定ホットリロード・放置監視・スリープ復帰検知
   setInterval(async () => {
-    await refreshPluginConfigs();
-    await updateSessionStatus(); // セッション開閉状態の同期
-    await loadChatMessages();
-    await syncAvatarStateWithMuse();
-    checkIdleAction();
-    maybeTriggerLiveQuotesWake();
-    loadUsageLimit(false);
-    ensureActiveAvatarSlot(); // 定期自己修復チェック (Issue #31)
+    const nowTick = Date.now();
+    const tickElapsedMs = nowTick - lastHeartbeatAt;
+    lastHeartbeatAt = nowTick;
+
+    if (tickElapsedMs >= SLEEP_RESUME_THRESHOLD_MS) {
+      console.info('[SessionRecovery] sleep resume detected', { tickElapsedMs });
+      invoke('log_session_recovery_event', {
+        event: 'sleep_resume_detected',
+        detail: `elapsed_ms=${tickElapsedMs}`
+      }).catch(() => {});
+      await recoverSessionAndRefetchLimit('sleep_resume');
+    }
+
+    if (!isReloadingSession) {
+      await refreshPluginConfigs();
+      await updateSessionStatus(); // セッション開閉状態の同期
+      await loadChatMessages();
+      await syncAvatarStateWithMuse();
+      checkIdleAction();
+      maybeTriggerLiveQuotesWake();
+      loadUsageLimit(false);
+      ensureActiveAvatarSlot(); // 定期自己修復チェック (Issue #31)
+    }
   }, 3000);
 
   // 12 秒ごとの自動バックグラウンド同期（チャット＆ヘルスチェック）

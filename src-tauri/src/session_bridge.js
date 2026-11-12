@@ -1060,6 +1060,36 @@ window.__MUSE_BRIDGE__ = {
   },
 
   /**
+   * 自動リロード実行前の DOM 安全性チェック (Issue #52)
+   * - isGenerating: 回答生成中（停止ボタン表示中）か
+   * - hasDraft: セッション入力欄に未送信の下書きが残っているか
+   * - isDialogOpen: 設定等のモーダルが開いているか
+   */
+  inspectReloadSafety() {
+    const isGenerating = !!document.querySelector(
+      'button[aria-label*="停止" i], button[aria-label*="stop" i], button[title*="停止" i], button[title*="stop" i]'
+    );
+    const { el: ta } = queryFirst(SELECTORS.chatInput);
+    let draftText = '';
+    if (ta) {
+      if ('value' in ta && typeof ta.value === 'string') {
+        draftText = ta.value;
+      } else {
+        draftText = ta.textContent || '';
+      }
+    }
+    const trimmedDraft = draftText.trim();
+    const isDialogOpen = !!document.querySelector('[role="dialog"]') || !!queryFirst(SELECTORS.modalCloseButton).el;
+    return {
+      isGenerating,
+      hasDraft: trimmedDraft.length > 0,
+      draftLength: trimmedDraft.length,
+      isDialogOpen,
+      currentUrl: window.location.href
+    };
+  },
+
+  /**
    * Title Bridge アクション実行ディスパッチャー
    */
   async executeAction(action, args, nonce) {
@@ -1084,6 +1114,9 @@ window.__MUSE_BRIDGE__ = {
           break;
         case 'check_chat_ready':
           result = await this.checkChatReady(args?.expectedUrl);
+          break;
+        case 'inspect_reload_safety':
+          result = this.inspectReloadSafety();
           break;
         case 'send_message':
           result = await this.sendMessage(args?.text);
