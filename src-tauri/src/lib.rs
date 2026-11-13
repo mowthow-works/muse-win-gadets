@@ -218,6 +218,121 @@ static IS_RESTORING_MASCOT: AtomicBool = AtomicBool::new(false);
 static CONFIG_SAVE_GENERATION: AtomicU64 = AtomicU64::new(0);
 static CONFIG_DIRTY: AtomicBool = AtomicBool::new(false);
 
+const MASCOT_HIT_PADDING: f64 = 4.0;
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct HitRect {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+#[derive(Default)]
+struct MascotHitState {
+    is_mascot_mode: bool,
+    rects: Vec<HitRect>,
+    last_ignored: Option<bool>,
+}
+
+static MASCOT_HIT_STATE: OnceLock<Mutex<MascotHitState>> = OnceLock::new();
+
+fn mascot_hit_state_mutex() -> &'static Mutex<MascotHitState> {
+    MASCOT_HIT_STATE.get_or_init(|| Mutex::new(MascotHitState::default()))
+}
+
+fn is_cursor_in_hit_rects(
+    cursor_physical: (f64, f64),
+    win_physical: (i32, i32),
+    scale_factor: f64,
+    rects: &[HitRect],
+) -> bool {
+    if rects.is_empty() || scale_factor <= 0.0 {
+        return true;
+    }
+    let local_x = (cursor_physical.0 - (win_physical.0 as f64)) / scale_factor;
+    let local_y = (cursor_physical.1 - (win_physical.1 as f64)) / scale_factor;
+    rects.iter().any(|r| {
+        r.width > 0.0
+            && r.height > 0.0
+            && local_x >= (r.x - MASCOT_HIT_PADDING)
+            && local_x <= (r.x + r.width + MASCOT_HIT_PADDING)
+            && local_y >= (r.y - MASCOT_HIT_PADDING)
+            && local_y <= (r.y + r.height + MASCOT_HIT_PADDING)
+    })
+}
+
+fn set_mascot_mode_hit_state(app: &AppHandle, is_mascot: bool) {
+    if let Ok(mut guard) = mascot_hit_state_mutex().lock() {
+        guard.is_mascot_mode = is_mascot;
+        if !is_mascot {
+            guard.last_ignored = Some(false);
+        }
+    }
+    if !is_mascot {
+        if let Some(win) = app.get_webview_window("main") {
+            let _ = win.set_ignore_cursor_events(false);
+        }
+    }
+}
+
+fn sync_mascot_cursor_passthrough(app: &AppHandle) {
+    let Some(win) = app.get_webview_window("main") else {
+        return;
+    };
+    if !win.is_visible().unwrap_or(false) || win.is_minimized().unwrap_or(false) {
+        return;
+    }
+
+    let (is_mascot, rects, last_ignored) = match mascot_hit_state_mutex().lock() {
+        Ok(guard) => (guard.is_mascot_mode, guard.rects.clone(), guard.last_ignored),
+        Err(_) => return,
+    };
+
+    if !is_mascot {
+        if last_ignored != Some(false) {
+            if win.set_ignore_cursor_events(false).is_ok() {
+                if let Ok(mut guard) = mascot_hit_state_mutex().lock() {
+                    guard.last_ignored = Some(false);
+                }
+            }
+        }
+        return;
+    }
+
+    let Ok(cursor_pos) = win.cursor_position() else {
+        return;
+    };
+    let Ok(win_pos) = win.inner_position().or_else(|_| win.outer_position()) else {
+        return;
+    };
+    let scale_factor = win.scale_factor().unwrap_or(1.0);
+    let in_rect = is_cursor_in_hit_rects(
+        (cursor_pos.x, cursor_pos.y),
+        (win_pos.x, win_pos.y),
+        scale_factor,
+        &rects,
+    );
+    let should_ignore = !in_rect;
+
+    if last_ignored != Some(should_ignore) {
+        if win.set_ignore_cursor_events(should_ignore).is_ok() {
+            if let Ok(mut guard) = mascot_hit_state_mutex().lock() {
+                guard.last_ignored = Some(should_ignore);
+            }
+        }
+    }
+}
+
+#[tauri::command]
+fn update_mascot_hit_rects(app: AppHandle, rects: Vec<HitRect>) -> Result<(), String> {
+    if let Ok(mut guard) = mascot_hit_state_mutex().lock() {
+        guard.rects = rects;
+    }
+    sync_mascot_cursor_passthrough(&app);
+    Ok(())
+}
+
 fn config_mutex() -> &'static Mutex<Option<GadgetConfig>> {
     CONFIG_STORE.get_or_init(|| Mutex::new(None))
 }
@@ -1711,6 +1826,7 @@ async fn toggle_size_mode(app: AppHandle) -> Result<String, String> {
     config.size_mode = next_mode.clone();
     config.last_normal_mode = next_mode.clone();
     let _ = save_config_internal(&app, &config);
+    set_mascot_mode_hit_state(&app, next_mode == "mascot");
 
     Ok(next_mode)
 }
@@ -1756,6 +1872,7 @@ async fn enter_mascot_mode(app: AppHandle) -> Result<String, String> {
 
     config.size_mode = "mascot".to_string();
     let _ = save_config_internal(&app, &config);
+    set_mascot_mode_hit_state(&app, true);
 
     Ok("mascot".to_string())
 }
@@ -1950,6 +2067,7 @@ async fn restore_from_mascot(app: AppHandle) -> Result<String, String> {
 
     config.size_mode = target_mode.to_string();
     let _ = save_config_internal(&app, &config);
+    set_mascot_mode_hit_state(&app, false);
 
     Ok(target_mode.to_string())
 }
@@ -1993,6 +2111,7 @@ async fn restore_mascot_window(app: &AppHandle, focus: bool) {
             }
         }
         IS_RESTORING_MASCOT.store(false, Ordering::SeqCst);
+        set_mascot_mode_hit_state(app, true);
         let _ = main_win.emit("session-visibility-changed", false);
         if focus {
             let _ = main_win.set_focus();
@@ -2712,6 +2831,7 @@ pub fn run() {
 
             // 設定の初期サイズ・位置・アイコンをメインウィンドウに反映
             let config = load_config_internal(handle);
+            set_mascot_mode_hit_state(handle, config.size_mode == "mascot");
             if let Some(main_win) = app.get_webview_window("main") {
                 let _ = main_win.set_icon(tauri::include_image!("icons/128x128.png"));
                 let (w, h) = if config.size_mode == "large" {
@@ -2789,6 +2909,16 @@ pub fn run() {
             // セッションウィンドウをバックグラウンドで先行初期化
             let _ = ensure_session_window(handle);
 
+            // マスコットモード時の透明領域クリック透過ポーリング (Issue #60)
+            let app_handle_for_hit = handle.clone();
+            tauri::async_runtime::spawn(async move {
+                let mut interval = tokio::time::interval(std::time::Duration::from_millis(50));
+                loop {
+                    interval.tick().await;
+                    sync_mascot_cursor_passthrough(&app_handle_for_hit);
+                }
+            });
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -2817,6 +2947,7 @@ pub fn run() {
             reset_mascot_position,
             set_mascot_scale,
             sync_mascot_bubble_direction,
+            update_mascot_hit_rects,
             toggle_minimize_restore,
             save_current_window_position,
             open_in_browser,
@@ -3220,5 +3351,32 @@ mod tests {
         assert!(has_usage_limit_changed(None, &lim1));
 
         let _ = fs::remove_dir_all(&tmp_base);
+    }
+
+    #[test]
+    fn test_is_cursor_in_hit_rects_handles_dpi_and_padding() {
+        let rects = vec![HitRect {
+            x: 492.0,
+            y: 45.0,
+            width: 120.0,
+            height: 170.0,
+        }];
+
+        // 空の場合は安全のため透過しない (true)
+        assert!(is_cursor_in_hit_rects((10.0, 10.0), (100, 100), 1.0, &[]));
+
+        // スケール 1.0: ウィンドウ左上 (100, 100)、ローカル座標 (500, 100) はアバター矩形内
+        assert!(is_cursor_in_hit_rects((600.0, 200.0), (100, 100), 1.0, &rects));
+
+        // スケール 1.0: 左側の透明吹き出し予定領域 (ローカル x=200, y=100) は矩形外 -> 透過 (false)
+        assert!(!is_cursor_in_hit_rects((300.0, 200.0), (100, 100), 1.0, &rects));
+
+        // パディング (4px) 境界内はヒット扱い (x = 492 - 3 = 489)
+        assert!(is_cursor_in_hit_rects((589.0, 200.0), (100, 100), 1.0, &rects));
+
+        // 高DPI (1.5x): 物理 (100 + 500*1.5, 100 + 100*1.5) = (850, 250) -> ローカル (500, 100)
+        assert!(is_cursor_in_hit_rects((850.0, 250.0), (100, 100), 1.5, &rects));
+        // 高DPI (1.5x): 物理 (100 + 200*1.5, 100 + 100*1.5) = (400, 250) -> ローカル (200, 100) は透過
+        assert!(!is_cursor_in_hit_rects((400.0, 250.0), (100, 100), 1.5, &rects));
     }
 }

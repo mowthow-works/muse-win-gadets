@@ -115,6 +115,50 @@ function applyMascotBubbleDirectionClass(onLeft) {
     heroCard.classList.add('bubble-on-right');
     heroCard.classList.remove('bubble-on-left');
   }
+  scheduleSyncMascotHitRects();
+}
+
+let mascotHitSyncPending = false;
+
+function collectMascotHitRects() {
+  if (!document.body.classList.contains('mode-mascot')) return [];
+  const ids = ['avatar-column', 'mascot-bubble', 'mascot-input-bar'];
+  const rects = [];
+  for (const id of ids) {
+    const el = document.getElementById(id);
+    if (!el || el.classList.contains('hidden')) continue;
+    if (typeof window.getComputedStyle === 'function' && window.getComputedStyle(el).display === 'none') {
+      continue;
+    }
+    const r = el.getBoundingClientRect();
+    if (r && r.width > 0 && r.height > 0) {
+      rects.push({
+        x: r.left,
+        y: r.top,
+        width: r.width,
+        height: r.height,
+      });
+    }
+  }
+  return rects;
+}
+
+function syncMascotHitRectsNow() {
+  mascotHitSyncPending = false;
+  if (!document.body.classList.contains('mode-mascot')) return;
+  const rects = collectMascotHitRects();
+  invoke('update_mascot_hit_rects', { rects }).catch(() => {});
+}
+
+function scheduleSyncMascotHitRects() {
+  if (!document.body.classList.contains('mode-mascot')) return;
+  if (mascotHitSyncPending) return;
+  mascotHitSyncPending = true;
+  if (typeof window.requestAnimationFrame === 'function') {
+    window.requestAnimationFrame(syncMascotHitRectsNow);
+  } else {
+    setTimeout(syncMascotHitRectsNow, 16);
+  }
 }
 
 async function updateMascotBubbleDirection() {
@@ -484,6 +528,7 @@ function playLupinTyping(text, options = [], meta = {}) {
   }
   mascotBubbleCursor.classList.remove('hidden');
   mascotBubble.classList.remove('hidden');
+  scheduleSyncMascotHitRects();
 
   startTypingLoop(cleanedText);
 }
@@ -509,6 +554,7 @@ function hideMascotBubble() {
     mascotBubbleOptions.innerHTML = '';
   }
   currentTypingOptions = [];
+  scheduleSyncMascotHitRects();
 }
 
 // ==========================================
@@ -521,6 +567,7 @@ function openMascotInput() {
   updateMascotBubbleDirection();
   mascotInputBar.classList.remove('hidden');
   mascotInputField.value = '';
+  scheduleSyncMascotHitRects();
   playTouchReactionSound();
   setTimeout(() => {
     mascotInputField.focus();
@@ -534,6 +581,7 @@ function closeMascotInput() {
   }
   if (!mascotInputBar) return;
   mascotInputBar.classList.add('hidden');
+  scheduleSyncMascotHitRects();
   try {
     window.focus();
   } catch (_) {}
@@ -2138,6 +2186,7 @@ function applySizeMode(mode) {
   document.body.classList.remove('mode-small', 'mode-large', 'mode-mascot');
   if (mode === 'mascot') {
     document.body.classList.add('mode-mascot');
+    scheduleSyncMascotHitRects();
   } else if (mode === 'large') {
     document.body.classList.add('mode-large');
     hideMascotBubble();
@@ -2153,6 +2202,7 @@ function applyMascotScale(scale) {
   document.body.classList.remove('scale-small', 'scale-standard', 'scale-large');
   const validScale = (scale === 'large' || scale === 'small') ? scale : 'standard';
   document.body.classList.add(`scale-${validScale}`);
+  scheduleSyncMascotHitRects();
 }
 
 // ==========================================
@@ -2588,4 +2638,18 @@ window.addEventListener('DOMContentLoaded', async () => {
       await loadUsageLimit(true);
     }
   }, 300000);
+
+  // マスコットモード時のインタラクティブ矩形監視 (Issue #60)
+  const hitTargets = ['avatar-column', 'mascot-bubble', 'mascot-input-bar']
+    .map((id) => document.getElementById(id))
+    .filter(Boolean);
+  if (typeof ResizeObserver === 'function' && hitTargets.length > 0) {
+    const ro = new ResizeObserver(() => scheduleSyncMascotHitRects());
+    hitTargets.forEach((el) => ro.observe(el));
+  }
+  if (typeof MutationObserver === 'function' && hitTargets.length > 0) {
+    const mo = new MutationObserver(() => scheduleSyncMascotHitRects());
+    hitTargets.forEach((el) => mo.observe(el, { attributes: true, attributeFilter: ['class', 'style'] }));
+  }
+  scheduleSyncMascotHitRects();
 });

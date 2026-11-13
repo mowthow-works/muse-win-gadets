@@ -614,4 +614,53 @@ describe('main.js UI Logic & Regression Suite', () => {
     expect(statusTextEl.textContent).toBe('🛠️ 作業中');
     expect(statusTextEl.textContent).not.toContain('ラッキー');
   });
+
+  it('マスコットモード時に表示中のインタラクティブ要素矩形のみを update_mascot_hit_rects へ同期する (Issue #60)', async () => {
+    const avatarCol = document.getElementById('avatar-column');
+    const bubble = document.getElementById('mascot-bubble');
+    const inputBar = document.getElementById('mascot-input-bar');
+    const closeBtn = document.getElementById('btn-bubble-close');
+
+    avatarCol.getBoundingClientRect = () => ({ left: 492, top: 45, width: 120, height: 170 });
+    bubble.getBoundingClientRect = () => ({ left: 10, top: 60, width: 460, height: 140 });
+    inputBar.getBoundingClientRect = () => ({ left: 10, top: 109, width: 460, height: 42 });
+
+    await vi.advanceTimersByTimeAsync(2100);
+    closeBtn.click();
+    await vi.advanceTimersByTimeAsync(100);
+    let hitCalls = invokeMock.mock.calls.filter(([cmd]) => cmd === 'update_mascot_hit_rects');
+    expect(hitCalls.length).toBeGreaterThan(0);
+    expect(hitCalls[hitCalls.length - 1][1].rects).toEqual([
+      { x: 492, y: 45, width: 120, height: 170 },
+    ]);
+
+    // 新着メッセージで吹き出しが表示されると、アバター + 吹き出しの2矩形が同期される
+    invokeMock.mockImplementation(async (cmd) => {
+      if (cmd === 'get_session_status') return { exists: true, visible: false, url: 'https://muse.ai/?__pwa=1' };
+      if (cmd === 'get_avatar_state') return { state: 'idle', statusText: 'リンク済み' };
+      if (cmd === 'get_chat_messages') {
+        return [
+          { role: 'assistant', text: '初期メッセージ' },
+          { role: 'assistant', text: 'テスト吹き出しです' },
+        ];
+      }
+      return {};
+    });
+    await vi.advanceTimersByTimeAsync(3200);
+    expect(bubble.classList.contains('hidden')).toBe(false);
+    hitCalls = invokeMock.mock.calls.filter(([cmd]) => cmd === 'update_mascot_hit_rects');
+    expect(hitCalls[hitCalls.length - 1][1].rects).toEqual([
+      { x: 492, y: 45, width: 120, height: 170 },
+      { x: 10, y: 60, width: 460, height: 140 },
+    ]);
+
+    // 吹き出しを閉じると再びアバター矩形のみに戻る
+    closeBtn.click();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(bubble.classList.contains('hidden')).toBe(true);
+    hitCalls = invokeMock.mock.calls.filter(([cmd]) => cmd === 'update_mascot_hit_rects');
+    expect(hitCalls[hitCalls.length - 1][1].rects).toEqual([
+      { x: 492, y: 45, width: 120, height: 170 },
+    ]);
+  });
 });
