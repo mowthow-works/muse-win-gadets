@@ -1604,20 +1604,34 @@ async function syncAvatarStateWithMuse() {
       const state = res.state || 'idle';
       const statusText = (res.statusText || '').trim();
 
-      // ステータスピル更新: 「リンク済み」「待機中」等の待機テキストは非表示。動作中テキストのみ表示 (Issue #35)
+      // ステータスピル更新: 「リンク済み」「待機中」等の待機テキストやアバター名そのものは表示しない (Issue #35, #57)
       if (avatarStatusPillEl && avatarStatusTextEl) {
-        const isIdleText = !statusText || /リンク|オンライン|待機|接続|ready|idle|online|connected/i.test(statusText);
+        const currentAvatarName = (avatarNameEl?.textContent || '').trim().toLowerCase();
+        const normalizedStatus = statusText.replace(/^(\p{Emoji}|[\u2600-\u27BF]|\s)+/gu, '').trim().toLowerCase();
+        const isAvatarNameOnly = Boolean(currentAvatarName) && normalizedStatus === currentAvatarName;
+        const effectiveStatusText = isAvatarNameOnly ? '' : statusText;
+        const isIdleText = effectiveStatusText && /リンク|オンライン|待機|接続|ready|idle|online|connected/i.test(effectiveStatusText);
         if (state === 'idle' || isIdleText) {
           avatarStatusPillEl.classList.add('hidden');
         } else {
-          // Muse側のアイコン(SVG)とテキストが分離しているため、絵文字がない場合は 🛠️ を付与
-          let formattedText = statusText;
-          const hasEmoji = /^(\p{Emoji}|[\u2600-\u27BF])/u.test(formattedText);
-          if (!hasEmoji) {
-            formattedText = `🛠️ ${formattedText}`;
+          const fallbackByState = {
+            working: '作業中',
+            making_something: '作成中',
+            waking: '起動中',
+            milestone_level_up: 'レベルアップ',
+          };
+          let formattedText = effectiveStatusText || fallbackByState[state] || '';
+          if (!formattedText) {
+            avatarStatusPillEl.classList.add('hidden');
+          } else {
+            // Muse側のアイコン(SVG)とテキストが分離しているため、絵文字がない場合は 🛠️ を付与
+            const hasEmoji = /^(\p{Emoji}|[\u2600-\u27BF])/u.test(formattedText);
+            if (!hasEmoji) {
+              formattedText = `🛠️ ${formattedText}`;
+            }
+            avatarStatusTextEl.textContent = formattedText;
+            avatarStatusPillEl.classList.remove('hidden');
           }
-          avatarStatusTextEl.textContent = formattedText;
-          avatarStatusPillEl.classList.remove('hidden');
         }
       }
 

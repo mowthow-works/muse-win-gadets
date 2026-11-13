@@ -592,4 +592,26 @@ describe('main.js UI Logic & Regression Suite', () => {
     expect(bubble.classList.contains('is-quote')).toBe(false);
     expect(titleEl.textContent).toBe('Muse');
   });
+
+  it('ステータスピルにアバター名が返された場合は誤表示せず state に応じたフォールバック文言を表示する (Issue #57)', async () => {
+    await vi.advanceTimersByTimeAsync(2000);
+
+    const avatarNameEl = document.getElementById('avatar-name');
+    avatarNameEl.textContent = 'ラッキー';
+    const statusPill = document.getElementById('avatar-status-pill');
+    const statusTextEl = document.getElementById('avatar-status-text');
+
+    invokeMock.mockImplementation(async (cmd) => {
+      if (cmd === 'get_session_status') return { exists: true, visible: false, url: 'https://muse.ai/?__pwa=1' };
+      if (cmd === 'get_chat_messages') return [{ role: 'assistant', text: '初期メッセージ' }];
+      if (cmd === 'get_avatar_state') return { state: 'working', statusText: 'ラッキー' };
+      return {};
+    });
+
+    await vi.advanceTimersByTimeAsync(3100);
+
+    expect(statusPill.classList.contains('hidden')).toBe(false);
+    expect(statusTextEl.textContent).toBe('🛠️ 作業中');
+    expect(statusTextEl.textContent).not.toContain('ラッキー');
+  });
 });

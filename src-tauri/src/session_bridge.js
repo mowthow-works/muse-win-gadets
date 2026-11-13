@@ -401,6 +401,8 @@ window.__MUSE_BRIDGE__ = {
         return !!el.closest('main, [class*="chat" i], [class*="prose" i], [class*="group/msg" i], [role="log"], textarea');
       };
 
+      const STATUS_TEXT_REGEX = /動作中|リンク済み|考え中|思考|作業中|実行中|作成|生成|構築|描画|検索|調査|確認|返信|オンライン|待機中|待機|オフライン|準備完了|接続|working|thinking|making|generating|searching|ready|idle|online|connected/i;
+
       // 優先探索: アバター動画 v の直近コンテナ内、またはアバター名周辺からステータス文字列を探索 (固定XPathは全廃)
       try {
         const rootContainer = v ? (v.closest('[class*="avatar" i], [class*="dock" i], [class*="header" i], aside') || v.parentElement) : document.body;
@@ -409,7 +411,7 @@ window.__MUSE_BRIDGE__ = {
           if (isInsideChat(e)) return false;
           const t = (e.textContent || '').trim();
           if (t.length === 0 || t.length > 20) return false;
-          return /動作中|リンク済み|考え中|思考|作業中|実行中|作成|生成|構築|描画|検索|調査|確認|返信|オンライン|待機中|オフライン|working|thinking|making|generating|searching/i.test(t);
+          return STATUS_TEXT_REGEX.test(t);
         });
         if (candidates.length > 0) {
           statusEl = candidates[0];
@@ -441,15 +443,15 @@ window.__MUSE_BRIDGE__ = {
         }
       }
 
-      // XPath で空だった場合のフォールバック（アバター親要素から取得）
+      // 親要素フォールバック（ステータス語彙を含む行のみを採用し、アバター名等の無関係な行を除外）
       if (!statusText && v) {
         let p = v.parentElement;
         for (let d = 0; d < 6 && p; d++) {
           const lines = (p.innerText || '')
             .split(/\n+/)
             .map(s => s.trim())
-            .filter(s => s.length > 0 && s.length <= 24);
-          if (lines.length >= 2) {
+            .filter(s => s.length > 0 && s.length <= 24 && STATUS_TEXT_REGEX.test(s));
+          if (lines.length > 0) {
             statusText = lines[lines.length - 1];
             break;
           }

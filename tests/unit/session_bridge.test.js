@@ -435,4 +435,27 @@ describe('session_bridge.js DOM Scraping & Guardrails Suite', () => {
     expect(opened).toBeNull();
     expect(document.title).toBe('__MUSE_OPEN_URL__:https://github.com/mowthow-works');
   });
+
+  it('getAvatarState (Issue #57): アバター親要素フォールバックでアバター名（ラッキー等）を statusText に誤抽出しない', async () => {
+    document.body.innerHTML = `
+      <aside class="avatar-dock">
+        <div id="avatar-box">
+          <video src="blob:https://muse.ai/avatar-1"></video>
+          <div>52%</div>
+          <div>ラッキー</div>
+        </div>
+      </aside>
+    `;
+    const box = document.getElementById('avatar-box');
+    Object.defineProperty(box, 'innerText', {
+      value: '52%\nラッキー',
+      configurable: true,
+    });
+    const video = document.querySelector('video');
+    video.__reactProps$test = { avatarState: 'working' };
+
+    const res = await window.__MUSE_BRIDGE__.getAvatarState();
+    expect(res.state).toBe('working');
+    expect(res.statusText).toBe('');
+  });
 });
