@@ -1,6 +1,6 @@
 # Muse Desktop Mascot
 
-[![Release](https://img.shields.io/badge/version-v1.1.3-blue.svg)](https://github.com/mowthow-works/muse-win-gadets/releases)
+[![Release](https://img.shields.io/badge/version-v1.1.4-blue.svg)](https://github.com/mowthow-works/muse-win-gadets/releases)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D6.svg)](https://www.microsoft.com/windows)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -104,7 +104,7 @@ Muse（パーソナルAIエージェント `https://muse.ai`）の Windows 向�
 | **他アプリを操作（チャット画面が裏へ）** | マスコットが自動的に最前面へ現れる（チャット画面が表に戻ると自動非表示） |
 | **`Ctrl + Shift + M`** | チャット画面 ⇄ マスコット状態の表示トグル（グローバルホットキー） |
 | **トレイアイコン左クリック** | チャット画面 ⇄ マスコット状態の表示トグル |
-| **トレイアイコン右クリック** | コンテキストメニュー表示（設定、表示サイズ、自動起動、効果音、ブラウザで開く、完全終了 等） |
+| **トレイアイコン右クリック** | コンテキストメニュー表示（設定、セッション再読み込み、表示サイズ、自動起動、効果音、ブラウザで開く、完全終了 等） |
 
 マスコットの表示サイズ（大 125% / 標準 100% / 小 80%）、Windows 起動時の自動起動、効果音の有効/無効などは、トレイメニューまたは設定画面から変更できます。
 

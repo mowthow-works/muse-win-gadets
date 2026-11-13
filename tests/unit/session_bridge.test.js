@@ -364,4 +364,127 @@ describe('session_bridge.js DOM Scraping & Guardrails Suite', () => {
     expect(closeClicked).toBe(false);
     expect(escapeDispatched).toBe(false);
   });
+
+  it('inspectReloadSafety (Issue #52): 生成中（停止ボタン）および未送信下書きの有無を正確に判定する', () => {
+    document.body.innerHTML = `
+      <main>
+        <textarea placeholder="メッセージを入力"></textarea>
+      </main>
+    `;
+    const ta = document.querySelector('textarea');
+
+    // 1. 何も入力されておらず停止ボタンも無い場合
+    let safety = window.__MUSE_BRIDGE__.inspectReloadSafety();
+    expect(safety.isGenerating).toBe(false);
+    expect(safety.hasDraft).toBe(false);
+    expect(safety.draftLength).toBe(0);
+
+    // 2. 空白のみの場合は下書きなし扱い
+    ta.value = '   \n  ';
+    safety = window.__MUSE_BRIDGE__.inspectReloadSafety();
+    expect(safety.hasDraft).toBe(false);
+
+    // 3. 未送信の下書きがある場合
+    ta.value = 'まだ送っていない質問';
+    safety = window.__MUSE_BRIDGE__.inspectReloadSafety();
+    expect(safety.hasDraft).toBe(true);
+    expect(safety.draftLength).toBe(10);
+
+    // 4. 下書きを消して停止ボタンが現れた場合（回答生成中）
+    ta.value = '';
+    const stopBtn = document.createElement('button');
+    stopBtn.setAttribute('aria-label', '回答の生成を停止');
+    document.querySelector('main').appendChild(stopBtn);
+    safety = window.__MUSE_BRIDGE__.inspectReloadSafety();
+    expect(safety.isGenerating).toBe(true);
+    expect(safety.hasDraft).toBe(false);
+  });
+
+  it('外部リンククリックおよび window.open を検知して __MUSE_OPEN_URL__ タイトル通知を発行する (Issue #54)', () => {
+    document.title = 'Muse AI - Session';
+    document.body.innerHTML = `
+      <main>
+        <a id="ext-link" href="https://example.com/docs" target="_blank"><span>外部リンク</span></a>
+        <a id="int-link" href="https://muse.ai/thread/abc">内部リンク</a>
+        <a id="oauth-link" href="https://accounts.google.com/o/oauth2/auth">Googleログイン</a>
+      </main>
+    `;
+
+    // 内部リンクはフックしない
+    const intEvent = new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 });
+    document.getElementById('int-link').dispatchEvent(intEvent);
+    expect(intEvent.defaultPrevented).toBe(false);
+    expect(document.title).toBe('Muse AI - Session');
+
+    // OAuthリンクもフックしない
+    const oauthEvent = new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 });
+    document.getElementById('oauth-link').dispatchEvent(oauthEvent);
+    expect(oauthEvent.defaultPrevented).toBe(false);
+    expect(document.title).toBe('Muse AI - Session');
+
+    // 外部リンク（子要素 <span> クリック）はフックして __MUSE_OPEN_URL__ を設定する
+    const extSpan = document.querySelector('#ext-link span');
+    const extEvent = new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 });
+    extSpan.dispatchEvent(extEvent);
+    expect(extEvent.defaultPrevented).toBe(true);
+    expect(document.title).toBe('__MUSE_OPEN_URL__:https://example.com/docs');
+
+    // window.open でも外部URLなら __MUSE_OPEN_URL__ を設定して null を返す
+    document.title = 'Muse AI - Session';
+    const opened = window.open('https://github.com/mowthow-works', '_blank');
+    expect(opened).toBeNull();
+    expect(document.title).toBe('__MUSE_OPEN_URL__:https://github.com/mowthow-works');
+  });
+
+  it('getAvatarState (Issue #57): アバター親要素フォールバックでアバター名（ラッキー等）を statusText に誤抽出しない', async () => {
+    document.body.innerHTML = `
+      <aside class="avatar-dock">
+        <div id="avatar-box">
+          <video src="blob:https://muse.ai/avatar-1"></video>
+          <div>52%</div>
+          <div>ラッキー</div>
+        </div>
+      </aside>
+    `;
+    const box = document.getElementById('avatar-box');
+    Object.defineProperty(box, 'innerText', {
+      value: '52%\nラッキー',
+      configurable: true,
+    });
+    const video = document.querySelector('video');
+    video.__reactProps$test = { avatarState: 'working' };
+
+    const res = await window.__MUSE_BRIDGE__.getAvatarState();
+    expect(res.state).toBe('working');
+    expect(res.statusText).toBe('');
+  });
+
+  it('getAvatarState (Issue #58): 親要素フォールバックで main チャット欄を含む上位要素のチャット本文を誤抽出しない', async () => {
+    document.body.innerHTML = `
+      <div id="layout-root">
+        <div id="avatar-wrap">
+          <div id="avatar-box">
+            <video src="blob:https://muse.ai/avatar-2"></video>
+            <div>ラッキー</div>
+          </div>
+        </div>
+        <main>
+          <div class="group/msg">
+            <div class="prose">- リフォームとのダブリ：なしと確認</div>
+          </div>
+        </main>
+      </div>
+    `;
+    const layoutRoot = document.getElementById('layout-root');
+    Object.defineProperty(layoutRoot, 'innerText', {
+      value: 'ラッキー\n- リフォームとのダブリ：なしと確認',
+      configurable: true,
+    });
+    const video = document.querySelector('video');
+    video.__reactProps$test = { avatarState: 'working' };
+
+    const res = await window.__MUSE_BRIDGE__.getAvatarState();
+    expect(res.state).toBe('working');
+    expect(res.statusText).toBe('');
+  });
 });

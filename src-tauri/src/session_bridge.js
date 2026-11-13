@@ -401,6 +401,8 @@ window.__MUSE_BRIDGE__ = {
         return !!el.closest('main, [class*="chat" i], [class*="prose" i], [class*="group/msg" i], [role="log"], textarea');
       };
 
+      const STATUS_TEXT_REGEX = /動作中|リンク済み|考え中|思考|作業中|実行中|作成|生成|構築|描画|検索|調査|確認|返信|オンライン|待機中|待機|オフライン|準備完了|接続|working|thinking|making|generating|searching|ready|idle|online|connected/i;
+
       // 優先探索: アバター動画 v の直近コンテナ内、またはアバター名周辺からステータス文字列を探索 (固定XPathは全廃)
       try {
         const rootContainer = v ? (v.closest('[class*="avatar" i], [class*="dock" i], [class*="header" i], aside') || v.parentElement) : document.body;
@@ -409,7 +411,7 @@ window.__MUSE_BRIDGE__ = {
           if (isInsideChat(e)) return false;
           const t = (e.textContent || '').trim();
           if (t.length === 0 || t.length > 20) return false;
-          return /動作中|リンク済み|考え中|思考|作業中|実行中|作成|生成|構築|描画|検索|調査|確認|返信|オンライン|待機中|オフライン|working|thinking|making|generating|searching/i.test(t);
+          return STATUS_TEXT_REGEX.test(t);
         });
         if (candidates.length > 0) {
           statusEl = candidates[0];
@@ -441,15 +443,21 @@ window.__MUSE_BRIDGE__ = {
         }
       }
 
-      // XPath で空だった場合のフォールバック（アバター親要素から取得）
+      // 親要素フォールバック（チャット領域を含む祖先へ到達したら即打ち切り、本文の誤抽出を防止）
       if (!statusText && v) {
         let p = v.parentElement;
         for (let d = 0; d < 6 && p; d++) {
+          if (
+            isInsideChat(p) ||
+            p.querySelector('main, [class*="chat" i], [class*="prose" i], [class*="group/msg" i], [role="log"], textarea')
+          ) {
+            break;
+          }
           const lines = (p.innerText || '')
             .split(/\n+/)
             .map(s => s.trim())
-            .filter(s => s.length > 0 && s.length <= 24);
-          if (lines.length >= 2) {
+            .filter(s => s.length > 0 && s.length <= 24 && STATUS_TEXT_REGEX.test(s));
+          if (lines.length > 0) {
             statusText = lines[lines.length - 1];
             break;
           }
@@ -1060,6 +1068,36 @@ window.__MUSE_BRIDGE__ = {
   },
 
   /**
+   * 自動リロード実行前の DOM 安全性チェック (Issue #52)
+   * - isGenerating: 回答生成中（停止ボタン表示中）か
+   * - hasDraft: セッション入力欄に未送信の下書きが残っているか
+   * - isDialogOpen: 設定等のモーダルが開いているか
+   */
+  inspectReloadSafety() {
+    const isGenerating = !!document.querySelector(
+      'button[aria-label*="停止" i], button[aria-label*="stop" i], button[title*="停止" i], button[title*="stop" i]'
+    );
+    const { el: ta } = queryFirst(SELECTORS.chatInput);
+    let draftText = '';
+    if (ta) {
+      if ('value' in ta && typeof ta.value === 'string') {
+        draftText = ta.value;
+      } else {
+        draftText = ta.textContent || '';
+      }
+    }
+    const trimmedDraft = draftText.trim();
+    const isDialogOpen = !!document.querySelector('[role="dialog"]') || !!queryFirst(SELECTORS.modalCloseButton).el;
+    return {
+      isGenerating,
+      hasDraft: trimmedDraft.length > 0,
+      draftLength: trimmedDraft.length,
+      isDialogOpen,
+      currentUrl: window.location.href
+    };
+  },
+
+  /**
    * Title Bridge アクション実行ディスパッチャー
    */
   async executeAction(action, args, nonce) {
@@ -1084,6 +1122,9 @@ window.__MUSE_BRIDGE__ = {
           break;
         case 'check_chat_ready':
           result = await this.checkChatReady(args?.expectedUrl);
+          break;
+        case 'inspect_reload_safety':
+          result = this.inspectReloadSafety();
           break;
         case 'send_message':
           result = await this.sendMessage(args?.text);
@@ -1134,3 +1175,91 @@ window.__MUSE_BRIDGE__ = {
     }
   }
 };
+
+function isSessionAllowedHost(hostname) {
+  const h = String(hostname || '').toLowerCase();
+  return (
+    h === 'muse.ai' ||
+    h.endsWith('.muse.ai') ||
+    h === 'accounts.google.com' ||
+    h === 'appleid.apple.com' ||
+    h === 'login.microsoftonline.com' ||
+    h === 'login.live.com'
+  );
+}
+
+function shouldOpenExternally(rawHref, baseHref) {
+  if (!rawHref || typeof rawHref !== 'string') return null;
+  const trimmed = rawHref.trim();
+  if (!trimmed || trimmed.startsWith('#')) return null;
+  let parsed;
+  try {
+    parsed = new URL(trimmed, baseHref || (typeof window !== 'undefined' && window.location ? window.location.href : 'https://muse.ai/'));
+  } catch (_) {
+    return null;
+  }
+  const protocol = (parsed.protocol || '').toLowerCase();
+  if (protocol === 'mailto:' || protocol === 'tel:') {
+    return parsed.href;
+  }
+  if (protocol === 'http:' || protocol === 'https:') {
+    if (!isSessionAllowedHost(parsed.hostname)) {
+      return parsed.href;
+    }
+  }
+  return null;
+}
+
+function notifyOpenExternalUrl(url) {
+  if (!url || typeof document === 'undefined') return;
+  const prevTitle = document.title && !document.title.startsWith('__MUSE_')
+    ? document.title
+    : 'Muse AI - Session';
+  document.title = `__MUSE_OPEN_URL__:${url}`;
+  setTimeout(() => {
+    if (document.title.startsWith('__MUSE_OPEN_URL__:')) {
+      document.title = prevTitle;
+    }
+  }, 100);
+}
+
+function installExternalLinkInterceptor() {
+  if (typeof window === 'undefined' || typeof document === 'undefined') return;
+  if (window.__MUSE_EXTERNAL_LINK_HOOKED__) return;
+  window.__MUSE_EXTERNAL_LINK_HOOKED__ = true;
+
+  document.addEventListener(
+    'click',
+    (e) => {
+      if (!e || e.defaultPrevented) return;
+      if (typeof e.button === 'number' && e.button !== 0 && e.button !== 1) return;
+      const target = e.target;
+      const anchor = target && typeof target.closest === 'function' ? target.closest('a[href]') : null;
+      if (!anchor) return;
+      const rawHref = anchor.getAttribute('href');
+      const extUrl = shouldOpenExternally(rawHref);
+      if (!extUrl) return;
+      e.preventDefault();
+      e.stopPropagation();
+      notifyOpenExternalUrl(extUrl);
+    },
+    true
+  );
+
+  if (typeof window.open === 'function') {
+    const origOpen = window.open.bind(window);
+    window.open = function (url, target, features) {
+      if (typeof url === 'string' && url.length > 0) {
+        const extUrl = shouldOpenExternally(url);
+        if (extUrl) {
+          notifyOpenExternalUrl(extUrl);
+          return null;
+        }
+      }
+      return origOpen(url, target, features);
+    };
+  }
+}
+
+installExternalLinkInterceptor();
+

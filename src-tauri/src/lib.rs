@@ -43,6 +43,56 @@ pub struct AvatarVideoPack {
 static NONCE_COUNTER: AtomicU64 = AtomicU64::new(1);
 static CURRENT_DOC_TITLE: OnceLock<Mutex<String>> = OnceLock::new();
 static BRIDGE_BUSY: AtomicBool = AtomicBool::new(false);
+static SESSION_RELOADING: AtomicBool = AtomicBool::new(false);
+
+struct SessionReloadGuard;
+impl Drop for SessionReloadGuard {
+    fn drop(&mut self) {
+        SESSION_RELOADING.store(false, Ordering::Release);
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct SessionReloadResult {
+    pub executed: bool,
+    pub success: bool,
+    pub reason: String,
+    pub skipped_reason: Option<String>,
+    pub before_url: String,
+    pub after_url: String,
+    pub url_matched: bool,
+    pub ready: bool,
+}
+
+pub fn format_recovery_log_line(timestamp: &str, event: &str, detail: &str) -> String {
+    format!("[{}] [{}] {}\n", timestamp, event, detail)
+}
+
+pub fn append_recovery_log_to_path(log_path: &std::path::Path, event: &str, detail: &str) {
+    if let Some(parent) = log_path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    if let Ok(meta) = fs::metadata(log_path) {
+        if meta.len() > 1_048_576 {
+            let old_path = log_path.with_extension("log.old");
+            let _ = fs::remove_file(&old_path);
+            let _ = fs::rename(log_path, &old_path);
+        }
+    }
+    let ts = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let line = format_recovery_log_line(&ts, event, detail);
+    if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(log_path) {
+        use std::io::Write;
+        let _ = file.write_all(line.as_bytes());
+    }
+}
+
+fn append_recovery_log(app: &AppHandle, event: &str, detail: &str) {
+    if let Ok(data_dir) = app.path().app_local_data_dir() {
+        let log_path = data_dir.join("session_recovery.log");
+        append_recovery_log_to_path(&log_path, event, detail);
+    }
+}
 
 fn doc_title_store() -> &'static Mutex<String> {
     CURRENT_DOC_TITLE.get_or_init(|| Mutex::new(String::new()))
@@ -88,7 +138,7 @@ pub struct ChatMessage {
     pub options: Option<Vec<String>>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct UsageLimitInfo {
     pub plan_name: String,
     pub used_percent: Option<u32>,
@@ -113,7 +163,7 @@ fn default_mascot_bubble_on_left() -> bool {
     true
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct GadgetConfig {
     pub size_mode: String, // "small", "large", or "mascot"
     #[serde(default = "default_last_normal_mode")]
@@ -137,6 +187,8 @@ pub struct GadgetConfig {
     pub session_pos: Option<(i32, i32)>,
     #[serde(default)]
     pub session_size: Option<(f64, f64)>,
+    #[serde(default)]
+    pub autostart_enabled: Option<bool>,
 }
 
 impl Default for GadgetConfig {
@@ -155,6 +207,7 @@ impl Default for GadgetConfig {
             mascot_pos: None,
             session_pos: None,
             session_size: None,
+            autostart_enabled: None,
         }
     }
 }
@@ -162,6 +215,8 @@ impl Default for GadgetConfig {
 static CONFIG_STORE: OnceLock<Mutex<Option<GadgetConfig>>> = OnceLock::new();
 static LAST_MASCOT_POS: OnceLock<Mutex<Option<(i32, i32)>>> = OnceLock::new();
 static IS_RESTORING_MASCOT: AtomicBool = AtomicBool::new(false);
+static CONFIG_SAVE_GENERATION: AtomicU64 = AtomicU64::new(0);
+static CONFIG_DIRTY: AtomicBool = AtomicBool::new(false);
 
 fn config_mutex() -> &'static Mutex<Option<GadgetConfig>> {
     CONFIG_STORE.get_or_init(|| Mutex::new(None))
@@ -248,7 +303,7 @@ fn load_config_internal(app: &AppHandle) -> GadgetConfig {
     GadgetConfig::default()
 }
 
-fn save_config_internal(app: &AppHandle, config: &GadgetConfig) -> Result<(), String> {
+fn normalize_config_for_save(config: &GadgetConfig) -> GadgetConfig {
     let mut to_save = config.clone();
     if let Some(pos) = to_save.mascot_pos {
         if pos.0 > -10000 && pos.1 > -10000 {
@@ -259,11 +314,39 @@ fn save_config_internal(app: &AppHandle, config: &GadgetConfig) -> Result<(), St
     } else if let Some(last_pos) = get_last_mascot_pos() {
         to_save.mascot_pos = Some(last_pos);
     }
+    to_save
+}
+
+fn write_config_to_path_if_changed(
+    path: &std::path::Path,
+    prev: Option<&GadgetConfig>,
+    next: &GadgetConfig,
+) -> Result<bool, String> {
+    if let Some(prev_cfg) = prev {
+        if prev_cfg == next && path.exists() {
+            return Ok(false);
+        }
+    }
+    let content = serde_json::to_string_pretty(next).map_err(|e| e.to_string())?;
+    let tmp_path = path.with_extension("json.tmp");
+    if fs::write(&tmp_path, &content).is_ok() {
+        if fs::rename(&tmp_path, path).is_ok() {
+            return Ok(true);
+        }
+        let _ = fs::remove_file(&tmp_path);
+    }
+    fs::write(path, content).map_err(|e| format!("Save config error: {}", e))?;
+    Ok(true)
+}
+
+fn save_config_internal(app: &AppHandle, config: &GadgetConfig) -> Result<(), String> {
+    let to_save = normalize_config_for_save(config);
     if let Ok(mut guard) = config_mutex().lock() {
-        *guard = Some(to_save.clone());
         let path = get_config_path(app)?;
-        let content = serde_json::to_string_pretty(&to_save).map_err(|e| e.to_string())?;
-        fs::write(path, content).map_err(|e| format!("Save config error: {}", e))?;
+        let prev = guard.as_ref();
+        let _ = write_config_to_path_if_changed(&path, prev, &to_save)?;
+        *guard = Some(to_save);
+        CONFIG_DIRTY.store(false, Ordering::SeqCst);
     }
     Ok(())
 }
@@ -278,6 +361,105 @@ where
     cfg
 }
 
+fn update_config_memory_only<F>(app: &AppHandle, updater: F) -> GadgetConfig
+where
+    F: FnOnce(&mut GadgetConfig),
+{
+    let mut cfg = load_config_internal(app);
+    updater(&mut cfg);
+    let normalized = normalize_config_for_save(&cfg);
+    if let Ok(mut guard) = config_mutex().lock() {
+        *guard = Some(normalized.clone());
+    }
+    normalized
+}
+
+fn flush_config_to_disk(app: &AppHandle) {
+    if !CONFIG_DIRTY.load(Ordering::SeqCst) {
+        return;
+    }
+    let snapshot = if let Ok(guard) = config_mutex().lock() {
+        guard.clone()
+    } else {
+        None
+    };
+    if let Some(cfg) = snapshot {
+        if let Ok(path) = get_config_path(app) {
+            if write_config_to_path_if_changed(&path, None, &cfg).is_ok() {
+                CONFIG_DIRTY.store(false, Ordering::SeqCst);
+            }
+        }
+    }
+}
+
+fn schedule_debounced_config_update<F>(app: &AppHandle, updater: F)
+where
+    F: FnOnce(&mut GadgetConfig),
+{
+    let mut cfg = load_config_internal(app);
+    let before = cfg.clone();
+    updater(&mut cfg);
+    let normalized = normalize_config_for_save(&cfg);
+    if before == normalized {
+        return;
+    }
+    if let Ok(mut guard) = config_mutex().lock() {
+        *guard = Some(normalized);
+    }
+    CONFIG_DIRTY.store(true, Ordering::SeqCst);
+    let gen = CONFIG_SAVE_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+    let app_clone = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        if CONFIG_SAVE_GENERATION.load(Ordering::SeqCst) == gen {
+            flush_config_to_disk(&app_clone);
+        }
+    });
+}
+
+fn has_usage_limit_changed(prev: Option<&UsageLimitInfo>, next: &UsageLimitInfo) -> bool {
+    match prev {
+        None => true,
+        Some(p) => {
+            p.used_percent != next.used_percent
+                || p.remaining_percent != next.remaining_percent
+                || p.reset_text != next.reset_text
+                || p.plan_name != next.plan_name
+        }
+    }
+}
+
+fn is_session_allowed_host(host: &str) -> bool {
+    let h = host.to_ascii_lowercase();
+    h == "muse.ai"
+        || h.ends_with(".muse.ai")
+        || h == "accounts.google.com"
+        || h == "appleid.apple.com"
+        || h == "login.microsoftonline.com"
+        || h == "login.live.com"
+}
+
+fn should_open_session_url_externally(url: &tauri::Url) -> bool {
+    match url.scheme() {
+        "http" | "https" => match url.host_str() {
+            Some(host) => !is_session_allowed_host(host),
+            None => false,
+        },
+        "mailto" | "tel" => true,
+        _ => false,
+    }
+}
+
+fn spawn_open_external_url(app: &AppHandle, event_name: &str, url_str: &str) {
+    let h = app.clone();
+    let ev = event_name.to_string();
+    let u = url_str.to_string();
+    tauri::async_runtime::spawn(async move {
+        let res = h.opener().open_url(&u, None::<&str>);
+        append_recovery_log(&h, &ev, &format!("url={}, open_res={:?}", u, res));
+    });
+}
+
 fn ensure_session_window(app: &AppHandle) -> Result<WebviewWindow, String> {
     if let Some(win) = app.get_webview_window("session") {
         return Ok(win);
@@ -290,11 +472,48 @@ fn ensure_session_window(app: &AppHandle) -> Result<WebviewWindow, String> {
     let config = load_config_internal(app);
     let (init_w, init_h) = config.session_size.unwrap_or((1024.0, 768.0));
 
+    let app_for_nav = app.clone();
+    let app_for_new_window = app.clone();
+    let app_for_title = app.clone();
+
     let mut builder = WebviewWindowBuilder::new(app, "session", WebviewUrl::External(url))
         .title("Muse AI - Session")
         .inner_size(init_w, init_h)
         .visible(false)
-        .on_document_title_changed(|_win, title| {
+        // WebView2 標準の HTML5 ドラッグ＆ドロップ（チャット入力欄への画像ドロップ等）を有効化するため
+        // Tauri 側のネイティブ D&D フックを無効化する
+        .disable_drag_drop_handler()
+        .on_navigation(move |url| {
+            if should_open_session_url_externally(&url) {
+                spawn_open_external_url(&app_for_nav, "session_on_navigation", url.as_str());
+                return false;
+            }
+            true
+        })
+        .on_new_window(move |url, _features| {
+            if should_open_session_url_externally(&url) {
+                spawn_open_external_url(
+                    &app_for_new_window,
+                    "session_on_new_window",
+                    url.as_str(),
+                );
+                return tauri::webview::NewWindowResponse::Deny;
+            }
+            tauri::webview::NewWindowResponse::Allow
+        })
+        .on_document_title_changed(move |_win, title| {
+            if let Some(raw_url) = title.strip_prefix("__MUSE_OPEN_URL__:") {
+                if let Ok(parsed) = tauri::Url::parse(raw_url) {
+                    if should_open_session_url_externally(&parsed) {
+                        spawn_open_external_url(
+                            &app_for_title,
+                            "session_title_open_url",
+                            parsed.as_str(),
+                        );
+                    }
+                }
+                return;
+            }
             if let Ok(mut t) = doc_title_store().lock() {
                 *t = title;
             }
@@ -345,7 +564,7 @@ fn ensure_session_window(app: &AppHandle) -> Result<WebviewWindow, String> {
                 tauri::async_runtime::spawn(async move {
                     if let Some(s) = h.get_webview_window("session") {
                         if !s.is_minimized().unwrap_or(false) && s.is_visible().unwrap_or(false) {
-                            update_config_internal(&h, |config| {
+                            schedule_debounced_config_update(&h, |config| {
                                 config.session_pos = Some((x, y));
                             });
                         }
@@ -370,7 +589,7 @@ fn ensure_session_window(app: &AppHandle) -> Result<WebviewWindow, String> {
                                 let w = w_raw as f64 / scale;
                                 let h_val = h_raw as f64 / scale;
                                 if w >= 250.0 && h_val >= 250.0 {
-                                    update_config_internal(&h, |config| {
+                                    schedule_debounced_config_update(&h, |config| {
                                         config.session_size = Some((w, h_val));
                                     });
                                 }
@@ -819,6 +1038,12 @@ fn extract_latest_assistant_text(messages_val: &serde_json::Value) -> Option<Str
 fn normalize_url_for_compare(u: &str) -> String {
     let base = u.trim().split('?').next().unwrap_or("").split('#').next().unwrap_or("");
     base.trim_end_matches('/').to_lowercase()
+}
+
+pub fn is_same_chat_url(before_url: &str, after_url: &str) -> bool {
+    let b = normalize_url_for_compare(before_url);
+    let a = normalize_url_for_compare(after_url);
+    !b.is_empty() && b == a
 }
 
 async fn wait_for_chat_ready(
@@ -1270,10 +1495,18 @@ async fn get_usage_limit(
     };
 
     if info.used_percent.is_some() || info.remaining_percent.is_some() {
+        let prev_cfg = load_config_internal(&app);
+        let changed = has_usage_limit_changed(prev_cfg.last_limit_info.as_ref(), &info);
         let saved = info.clone();
-        update_config_internal(&app, |cfg| {
-            cfg.last_limit_info = Some(saved);
-        });
+        if changed {
+            update_config_internal(&app, |cfg| {
+                cfg.last_limit_info = Some(saved);
+            });
+        } else {
+            update_config_memory_only(&app, |cfg| {
+                cfg.last_limit_info = Some(saved);
+            });
+        }
         return Ok(info);
     }
 
@@ -1944,6 +2177,199 @@ async fn get_session_status(app: AppHandle) -> Result<SessionStatus, String> {
 }
 
 #[tauri::command]
+fn log_session_recovery_event(app: AppHandle, event: String, detail: String) -> bool {
+    append_recovery_log(&app, &event, &detail);
+    true
+}
+
+#[tauri::command]
+async fn inspect_session_reload_safety(app: AppHandle) -> Result<serde_json::Value, String> {
+    let session = ensure_session_window(&app)?;
+    run_bridge_action(&session, "inspect_reload_safety", &serde_json::json!({}), 3000).await
+}
+
+#[tauri::command]
+async fn reload_session(
+    app: AppHandle,
+    reason: Option<String>,
+    force: Option<bool>,
+) -> Result<SessionReloadResult, String> {
+    let reason_str = reason.unwrap_or_else(|| "manual".to_string());
+    let is_force = force.unwrap_or(false);
+
+    if SESSION_RELOADING
+        .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+        .is_err()
+    {
+        append_recovery_log(
+            &app,
+            "reload_skipped",
+            &format!("reason={}, guard=already_reloading", reason_str),
+        );
+        return Ok(SessionReloadResult {
+            executed: false,
+            success: false,
+            reason: reason_str,
+            skipped_reason: Some("already_reloading".to_string()),
+            before_url: String::new(),
+            after_url: String::new(),
+            url_matched: false,
+            ready: false,
+        });
+    }
+    let _reload_guard = SessionReloadGuard;
+
+    let session = ensure_session_window(&app)?;
+    let before_url = session.url().ok().map(|u| u.to_string()).unwrap_or_default();
+
+    if !is_force {
+        let is_visible = session.is_visible().unwrap_or(false) && !session.is_minimized().unwrap_or(false);
+        if is_visible {
+            append_recovery_log(
+                &app,
+                "reload_skipped",
+                &format!("reason={}, guard=session_visible, url={}", reason_str, before_url),
+            );
+            return Ok(SessionReloadResult {
+                executed: false,
+                success: false,
+                reason: reason_str,
+                skipped_reason: Some("session_visible".to_string()),
+                before_url: before_url.clone(),
+                after_url: before_url,
+                url_matched: true,
+                ready: false,
+            });
+        }
+
+        match run_bridge_action(&session, "inspect_reload_safety", &serde_json::json!({}), 3000).await {
+            Ok(val) => {
+                if val.get("isGenerating").and_then(|v| v.as_bool()).unwrap_or(false) {
+                    append_recovery_log(
+                        &app,
+                        "reload_skipped",
+                        &format!("reason={}, guard=session_generating, url={}", reason_str, before_url),
+                    );
+                    return Ok(SessionReloadResult {
+                        executed: false,
+                        success: false,
+                        reason: reason_str,
+                        skipped_reason: Some("session_generating".to_string()),
+                        before_url: before_url.clone(),
+                        after_url: before_url,
+                        url_matched: true,
+                        ready: false,
+                    });
+                }
+                if val.get("hasDraft").and_then(|v| v.as_bool()).unwrap_or(false) {
+                    append_recovery_log(
+                        &app,
+                        "reload_skipped",
+                        &format!("reason={}, guard=session_draft_present, url={}", reason_str, before_url),
+                    );
+                    return Ok(SessionReloadResult {
+                        executed: false,
+                        success: false,
+                        reason: reason_str,
+                        skipped_reason: Some("session_draft_present".to_string()),
+                        before_url: before_url.clone(),
+                        after_url: before_url,
+                        url_matched: true,
+                        ready: false,
+                    });
+                }
+            }
+            Err(err) => {
+                append_recovery_log(
+                    &app,
+                    "reload_skipped",
+                    &format!("reason={}, guard=safety_check_unavailable ({}), url={}", reason_str, err, before_url),
+                );
+                return Ok(SessionReloadResult {
+                    executed: false,
+                    success: false,
+                    reason: reason_str,
+                    skipped_reason: Some("safety_check_unavailable".to_string()),
+                    before_url: before_url.clone(),
+                    after_url: before_url,
+                    url_matched: true,
+                    ready: false,
+                });
+            }
+        }
+    }
+
+    append_recovery_log(
+        &app,
+        "reload_start",
+        &format!("reason={}, force={}, before_url={}", reason_str, is_force, before_url),
+    );
+
+    if let Err(e) = session.reload() {
+        let msg = format!("Session reload failed: {}", e);
+        append_recovery_log(
+            &app,
+            "reload_failed",
+            &format!("reason={}, error={}, before_url={}", reason_str, msg, before_url),
+        );
+        return Err(msg);
+    }
+
+    let mut final_ready = wait_for_chat_ready(&session, None, 15000, true)
+        .await
+        .unwrap_or(false);
+    let mut after_url = session.url().ok().map(|u| u.to_string()).unwrap_or_default();
+    let mut url_matched = is_same_chat_url(&before_url, &after_url);
+
+    if !url_matched && before_url.starts_with("https://") {
+        append_recovery_log(
+            &app,
+            "reload_url_mismatch",
+            &format!(
+                "reason={}, before_url={}, after_url={} (attempting restore)",
+                reason_str, before_url, after_url
+            ),
+        );
+        if let Ok(parsed_url) = before_url.parse::<tauri::Url>() {
+            if session.navigate(parsed_url).is_ok() {
+                final_ready = wait_for_chat_ready(&session, Some(&before_url), 15000, true)
+                    .await
+                    .unwrap_or(false);
+                after_url = session.url().ok().map(|u| u.to_string()).unwrap_or_default();
+                url_matched = is_same_chat_url(&before_url, &after_url);
+            }
+        }
+    }
+
+    let success = final_ready && url_matched;
+    append_recovery_log(
+        &app,
+        if success { "reload_success" } else { "reload_incomplete" },
+        &format!(
+            "reason={}, ready={}, url_matched={}, before_url={}, after_url={}",
+            reason_str, final_ready, url_matched, before_url, after_url
+        ),
+    );
+
+    let res = SessionReloadResult {
+        executed: true,
+        success,
+        reason: reason_str,
+        skipped_reason: None,
+        before_url,
+        after_url,
+        url_matched,
+        ready: final_ready,
+    };
+
+    if let Some(main_win) = app.get_webview_window("main") {
+        let _ = main_win.emit("session-reloaded", &res);
+    }
+
+    Ok(res)
+}
+
+#[tauri::command]
 fn drag_window(window: tauri::Window) {
     let _ = window.start_dragging();
 }
@@ -1956,6 +2382,66 @@ fn minimize_window(window: tauri::Window) {
 #[tauri::command]
 fn close_window(app: AppHandle) {
     app.exit(0);
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct AutostartReconcilePlan {
+    desired_enabled: bool,
+    should_save_config: bool,
+    should_apply_os: bool,
+}
+
+fn plan_autostart_reconciliation(saved: Option<bool>, os_enabled: bool) -> AutostartReconcilePlan {
+    match saved {
+        None => AutostartReconcilePlan {
+            desired_enabled: os_enabled,
+            should_save_config: true,
+            should_apply_os: false,
+        },
+        Some(desired) => AutostartReconcilePlan {
+            desired_enabled: desired,
+            should_save_config: false,
+            should_apply_os: desired != os_enabled,
+        },
+    }
+}
+
+fn sync_autostart_on_startup(app: &AppHandle) -> bool {
+    let config = load_config_internal(app);
+    let autolaunch = app.autolaunch();
+    let os_enabled = autolaunch.is_enabled().unwrap_or(false);
+    let plan = plan_autostart_reconciliation(config.autostart_enabled, os_enabled);
+
+    if plan.should_save_config {
+        update_config_internal(app, |cfg| {
+            cfg.autostart_enabled = Some(plan.desired_enabled);
+        });
+    }
+
+    if plan.should_apply_os {
+        let apply_res = if plan.desired_enabled {
+            autolaunch.enable()
+        } else {
+            autolaunch.disable()
+        };
+        append_recovery_log(
+            app,
+            "autostart_reconcile",
+            &format!(
+                "saved={:?}, os_enabled={}, desired={}, ok={}",
+                config.autostart_enabled,
+                os_enabled,
+                plan.desired_enabled,
+                apply_res.is_ok()
+            ),
+        );
+        if apply_res.is_ok() {
+            return plan.desired_enabled;
+        }
+        return os_enabled;
+    }
+
+    plan.desired_enabled
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1973,14 +2459,15 @@ pub fn run() {
             // システムトレイの初期化
             let toggle_app = MenuItem::with_id(handle, "toggle_app", "セッション画面 ⇄ マスコット (Ctrl+Shift+M)", true, None::<&str>)?;
             let open_session = MenuItem::with_id(handle, "open_session", "セッション画面を開く (公式UI)", true, None::<&str>)?;
+            let reload_session_item = MenuItem::with_id(handle, "reload_session", "セッションを再読み込み", true, None::<&str>)?;
             let item_settings = MenuItem::with_id(handle, "open_settings", "設定...", true, None::<&str>)?;
             let item_open_mascot_devtools = MenuItem::with_id(handle, "open_mascot_devtools", "マスコットの開発者ツールを開く", true, None::<&str>)?;
             let item_open_session_devtools = MenuItem::with_id(handle, "open_devtools", "セッションの開発者ツールを開く", true, None::<&str>)?;
             let toggle_mascot = MenuItem::with_id(handle, "toggle_mascot", "マスコットモード (アバター単体)", true, None::<&str>)?;
             let item_reset_pos = MenuItem::with_id(handle, "reset_mascot_pos", "マスコット位置を初期位置に戻す", true, None::<&str>)?;
 
-            // スタートアップ自動起動の初期化 (Issue #22)
-            let is_autostart = handle.autolaunch().is_enabled().unwrap_or(false);
+            // スタートアップ自動起動の初期化・永続化同期 (Issue #22, #53)
+            let is_autostart = sync_autostart_on_startup(handle);
             let item_autostart = CheckMenuItem::with_id(
                 handle,
                 "toggle_autostart",
@@ -2053,6 +2540,7 @@ pub fn run() {
                 &[
                     &toggle_app,
                     &open_session,
+                    &reload_session_item,
                     &item_settings,
                     &item_open_mascot_devtools,
                     &item_open_session_devtools,
@@ -2082,6 +2570,12 @@ pub fn run() {
                         let app_clone = app.clone();
                         tauri::async_runtime::spawn(async move {
                             let _ = open_or_show_session(app_clone).await;
+                        });
+                    }
+                    "reload_session" => {
+                        let app_clone = app.clone();
+                        tauri::async_runtime::spawn(async move {
+                            let _ = reload_session(app_clone, Some("manual_tray".to_string()), Some(true)).await;
                         });
                     }
                     "open_settings" => {
@@ -2121,10 +2615,16 @@ pub fn run() {
                         if currently_enabled {
                             if autolaunch.disable().is_ok() {
                                 let _ = item_autostart_clone.set_checked(false);
+                                update_config_internal(app, |cfg| {
+                                    cfg.autostart_enabled = Some(false);
+                                });
                             }
                         } else {
                             if autolaunch.enable().is_ok() {
                                 let _ = item_autostart_clone.set_checked(true);
+                                update_config_internal(app, |cfg| {
+                                    cfg.autostart_enabled = Some(true);
+                                });
                             }
                         }
                     }
@@ -2178,6 +2678,7 @@ pub fn run() {
                         });
                     }
                     "quit" => {
+                        flush_config_to_disk(app);
                         app.exit(0);
                     }
                     _ => {}
@@ -2253,6 +2754,7 @@ pub fn run() {
                     match event {
                         tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed => {
                             // main ウィンドウが閉じられた場合はプロセスを残さず確実に完全終了
+                            flush_config_to_disk(&app_handle_for_events);
                             app_handle_for_events.exit(0);
                         }
                         tauri::WindowEvent::Moved(pos) => {
@@ -2268,7 +2770,7 @@ pub fn run() {
                                     return;
                                 }
                             }
-                            update_config_internal(&app_handle_for_events, |cfg| {
+                            schedule_debounced_config_update(&app_handle_for_events, |cfg| {
                                 if cfg.size_mode == "mascot" {
                                     set_last_mascot_pos((pos.x, pos.y));
                                     cfg.mascot_pos = Some((pos.x, pos.y));
@@ -2320,6 +2822,9 @@ pub fn run() {
             open_in_browser,
             open_or_show_session,
             hide_session,
+            reload_session,
+            inspect_session_reload_safety,
+            log_session_recovery_event,
             open_mascot_devtools,
             open_session_devtools,
             get_session_status,
@@ -2548,6 +3053,171 @@ mod tests {
         // 第2ディレクトリ(dir_fallback)の sleeping.mp4 もマージ収集されていること
         let expected_sleeping = format!("data:video/mp4;base64,{}", BASE64_STANDARD.encode(b"default_sleeping"));
         assert_eq!(sleeping.data_url, expected_sleeping);
+
+        let _ = fs::remove_dir_all(&tmp_base);
+    }
+
+    #[test]
+    fn test_is_same_chat_url() {
+        assert!(is_same_chat_url(
+            "https://muse.ai/thread/76e0499a-0c43-4644-87db-95b14cf2bdac",
+            "https://muse.ai/thread/76e0499a-0c43-4644-87db-95b14cf2bdac/?__pwa=1"
+        ));
+        assert!(is_same_chat_url(
+            "https://muse.ai/?__pwa=1",
+            "https://muse.ai/"
+        ));
+        assert!(!is_same_chat_url(
+            "https://muse.ai/thread/76e0499a-0c43-4644-87db-95b14cf2bdac",
+            "https://muse.ai/"
+        ));
+        assert!(!is_same_chat_url("", "https://muse.ai/"));
+    }
+
+    #[test]
+    fn test_append_recovery_log_to_path_and_rotation() {
+        let tmp_base = std::env::temp_dir().join(format!("muse_recovery_log_test_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp_base);
+        let log_path = tmp_base.join("session_recovery.log");
+
+        append_recovery_log_to_path(&log_path, "sleep_resume", "reason=sleep_resume, ready=true");
+        append_recovery_log_to_path(&log_path, "reload_success", "url_matched=true");
+
+        let body = fs::read_to_string(&log_path).expect("log file should exist");
+        assert!(body.contains("[sleep_resume] reason=sleep_resume, ready=true"));
+        assert!(body.contains("[reload_success] url_matched=true"));
+
+        // 1MB 超えでローテートされることを確認
+        let oversized = vec![b'x'; 1_048_600];
+        fs::write(&log_path, oversized).unwrap();
+        append_recovery_log_to_path(&log_path, "post_rotate", "ok=true");
+
+        let old_path = log_path.with_extension("log.old");
+        assert!(old_path.exists());
+        let rotated_body = fs::read_to_string(&log_path).unwrap();
+        assert!(rotated_body.contains("[post_rotate] ok=true"));
+        assert!(rotated_body.len() < 1024);
+
+        let _ = fs::remove_dir_all(&tmp_base);
+    }
+
+    #[test]
+    fn test_session_external_url_detection() {
+        let muse_root = tauri::Url::parse("https://muse.ai/?__pwa=1").unwrap();
+        let muse_sub = tauri::Url::parse("https://app.muse.ai/thread/123").unwrap();
+        let google_auth = tauri::Url::parse("https://accounts.google.com/o/oauth2/v2/auth").unwrap();
+        let apple_auth = tauri::Url::parse("https://appleid.apple.com/auth/authorize").unwrap();
+        let external_site = tauri::Url::parse("https://github.com/mowthow-works/muse-win-gadets").unwrap();
+        let google_search = tauri::Url::parse("https://www.google.com/search?q=muse").unwrap();
+        let mailto_url = tauri::Url::parse("mailto:support@example.com").unwrap();
+        let about_blank = tauri::Url::parse("about:blank").unwrap();
+
+        assert!(!should_open_session_url_externally(&muse_root));
+        assert!(!should_open_session_url_externally(&muse_sub));
+        assert!(!should_open_session_url_externally(&google_auth));
+        assert!(!should_open_session_url_externally(&apple_auth));
+        assert!(should_open_session_url_externally(&external_site));
+        assert!(should_open_session_url_externally(&google_search));
+        assert!(should_open_session_url_externally(&mailto_url));
+        assert!(!should_open_session_url_externally(&about_blank));
+    }
+
+    #[test]
+    fn test_plan_autostart_reconciliation() {
+        // 初回移行時（config 未保存）は OS の現在状態を取り込んで config に保存する
+        assert_eq!(
+            plan_autostart_reconciliation(None, true),
+            AutostartReconcilePlan {
+                desired_enabled: true,
+                should_save_config: true,
+                should_apply_os: false,
+            }
+        );
+        assert_eq!(
+            plan_autostart_reconciliation(None, false),
+            AutostartReconcilePlan {
+                desired_enabled: false,
+                should_save_config: true,
+                should_apply_os: false,
+            }
+        );
+
+        // config が true なのに OS 側が消えている場合は自動復元する
+        assert_eq!(
+            plan_autostart_reconciliation(Some(true), false),
+            AutostartReconcilePlan {
+                desired_enabled: true,
+                should_save_config: false,
+                should_apply_os: true,
+            }
+        );
+
+        // config と OS 側が一致していれば何もしない
+        assert_eq!(
+            plan_autostart_reconciliation(Some(true), true),
+            AutostartReconcilePlan {
+                desired_enabled: true,
+                should_save_config: false,
+                should_apply_os: false,
+            }
+        );
+        assert_eq!(
+            plan_autostart_reconciliation(Some(false), false),
+            AutostartReconcilePlan {
+                desired_enabled: false,
+                should_save_config: false,
+                should_apply_os: false,
+            }
+        );
+
+        // config が false なのに OS 側が有効な場合は無効化して同期する
+        assert_eq!(
+            plan_autostart_reconciliation(Some(false), true),
+            AutostartReconcilePlan {
+                desired_enabled: false,
+                should_save_config: false,
+                should_apply_os: true,
+            }
+        );
+    }
+
+    #[test]
+    fn test_write_config_to_path_if_changed_and_usage_limit_diff() {
+        let tmp_base = std::env::temp_dir().join(format!("muse_cfg_perf_test_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp_base);
+        fs::create_dir_all(&tmp_base).unwrap();
+        let cfg_path = tmp_base.join("gadget_config.json");
+
+        let cfg1 = GadgetConfig::default();
+        // 初回はファイルが無いため書き出される
+        assert!(write_config_to_path_if_changed(&cfg_path, None, &cfg1).unwrap());
+        assert!(cfg_path.exists());
+        assert!(!cfg_path.with_extension("json.tmp").exists());
+
+        // 同一内容ならスキップされる (false)
+        assert!(!write_config_to_path_if_changed(&cfg_path, Some(&cfg1), &cfg1).unwrap());
+
+        // 内容が変わったら書き出される (true)
+        let mut cfg2 = cfg1.clone();
+        cfg2.autostart_enabled = Some(true);
+        assert!(write_config_to_path_if_changed(&cfg_path, Some(&cfg1), &cfg2).unwrap());
+
+        // UsageLimitInfo は updated_at のみの変化なら変更なし扱い
+        let lim1 = UsageLimitInfo {
+            plan_name: "Pro".to_string(),
+            used_percent: Some(42),
+            remaining_percent: Some(58),
+            reset_text: "1週間の上限".to_string(),
+            updated_at: "2026-11-12 22:00:00".to_string(),
+        };
+        let mut lim2 = lim1.clone();
+        lim2.updated_at = "2026-11-12 22:02:00".to_string();
+        assert!(!has_usage_limit_changed(Some(&lim1), &lim2));
+
+        lim2.used_percent = Some(43);
+        lim2.remaining_percent = Some(57);
+        assert!(has_usage_limit_changed(Some(&lim1), &lim2));
+        assert!(has_usage_limit_changed(None, &lim1));
 
         let _ = fs::remove_dir_all(&tmp_base);
     }
