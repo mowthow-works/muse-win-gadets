@@ -458,4 +458,33 @@ describe('session_bridge.js DOM Scraping & Guardrails Suite', () => {
     expect(res.state).toBe('working');
     expect(res.statusText).toBe('');
   });
+
+  it('getAvatarState (Issue #58): 親要素フォールバックで main チャット欄を含む上位要素のチャット本文を誤抽出しない', async () => {
+    document.body.innerHTML = `
+      <div id="layout-root">
+        <div id="avatar-wrap">
+          <div id="avatar-box">
+            <video src="blob:https://muse.ai/avatar-2"></video>
+            <div>ラッキー</div>
+          </div>
+        </div>
+        <main>
+          <div class="group/msg">
+            <div class="prose">- リフォームとのダブリ：なしと確認</div>
+          </div>
+        </main>
+      </div>
+    `;
+    const layoutRoot = document.getElementById('layout-root');
+    Object.defineProperty(layoutRoot, 'innerText', {
+      value: 'ラッキー\n- リフォームとのダブリ：なしと確認',
+      configurable: true,
+    });
+    const video = document.querySelector('video');
+    video.__reactProps$test = { avatarState: 'working' };
+
+    const res = await window.__MUSE_BRIDGE__.getAvatarState();
+    expect(res.state).toBe('working');
+    expect(res.statusText).toBe('');
+  });
 });

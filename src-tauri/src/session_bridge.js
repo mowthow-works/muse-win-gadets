@@ -443,10 +443,16 @@ window.__MUSE_BRIDGE__ = {
         }
       }
 
-      // 親要素フォールバック（ステータス語彙を含む行のみを採用し、アバター名等の無関係な行を除外）
+      // 親要素フォールバック（チャット領域を含む祖先へ到達したら即打ち切り、本文の誤抽出を防止）
       if (!statusText && v) {
         let p = v.parentElement;
         for (let d = 0; d < 6 && p; d++) {
+          if (
+            isInsideChat(p) ||
+            p.querySelector('main, [class*="chat" i], [class*="prose" i], [class*="group/msg" i], [role="log"], textarea')
+          ) {
+            break;
+          }
           const lines = (p.innerText || '')
             .split(/\n+/)
             .map(s => s.trim())
