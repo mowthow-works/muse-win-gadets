@@ -43,6 +43,11 @@
   - ビルド時間の短縮のため、**Debug ビルド（`cargo build`）** で実施し、生成された `src-tauri/target/debug/muse-desktop-mascot.exe` を `dist/muse-desktop-mascot.exe` へ配置して動作確認を行うこと（配布用 ZIP やインストーラの作成はスキップ）。
 - **Release 時（`main` ブランチへマージする直前）**:
   - バージョンの全機能が揃い、ユーザーから「Releaseします！」と指示された `main` マージ直前のタイミングでのみ、**Release ビルドおよびインストーラ作成（`npm run build:installer` / `npx tauri build`）** を行い、最適化された `.exe` を `dist/` へ上書き配置し、配布用 ZIP アーカイブ（`muse-desktop-mascot-v*.zip`）および NSIS セットアップインストーラを作成・Release へ添付すること。通常開発時はインストーラ作成を行わないこと。
+  - **Release 前ドキュメント同期チェックリスト**（ビルド・タグ打ちの前に必ず確認すること）：
+    1. `git log <前回タグ>..HEAD --oneline` で対象バージョンの全変更（Issue）を洗い出す。
+    2. `README.md` のバージョンバッジ（`version-vX.Y.Z`）および記載内容を最新化し、`dist/README.md` へ同期する。
+    3. `docs/SPEC.md` の該当セクション（新仕様・挙動変更）および「§18 バージョンと機能の対応」に当該バージョン行を追記する。
+    4. 設定項目・トレイメニュー・UI 操作に変更がある場合、`docs/CUSTOMIZE.md` を更新する。
 
 
 ---
@@ -54,7 +59,7 @@
 - **第1層：Rust バックエンド単体テスト (`npm run test:rust`)**
   - 対象: `src-tauri/src/lib.rs`（設定互換性、AppDataシード・プラグイン動画収集、URL正規化、異常座標ガード等）
 - **第2層：フロントエンド＆ブリッジ単体テスト (`npm run test:unit`)**
-  - 対象: `tests/unit/session_bridge.test.js`, `tests/unit/main_logic.test.js`（Vitest + jsdom による Muse DOM 解析・選択肢抽出・利用枠算出・IME二重送信防止・ライブつぶやき抽出等の検証）
+  - 対象: `tests/unit/session_bridge.test.js`, `tests/unit/main_logic.test.js`, `tests/unit/docs_sync.test.js`（Vitest + jsdom による Muse DOM 解析・選択肢抽出・利用枠算出・IME二重送信防止・ライブつぶやき抽出・ドキュメント/バージョン整合性等の検証）
 - **第3層：Playwright 実ブラウザ UI / レイアウト回帰テスト (`npm run test:e2e`)**
   - 対象: `tests/e2e/mascot.spec.js`（Microsoft Edge ヘッドレスエンジン上で `src/index.html`・`src/settings.html` を実描画し、ステータスピル表示時のアバター位置ブレ 0px 検証やスケール切替・選択肢返信・設定保存を E2E 検証）
 
